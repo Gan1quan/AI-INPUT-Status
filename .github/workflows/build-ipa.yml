@@ -1,0 +1,48 @@
+name: Build IPA
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+    tags: ["v*", "native-v*"]
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_15.4.app
+      - name: Generate project
+        working-directory: native
+        run: xcodegen generate
+      - name: Build unsigned app
+        working-directory: native
+        run: |
+          xcodebuild \
+            -project AIInputStatus.xcodeproj \
+            -scheme AIInputStatus \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY='' \
+            DEVELOPMENT_TEAM='' \
+            CONFIGURATION_BUILD_DIR="$PWD/build" \
+            clean build
+      - name: Package IPA
+        working-directory: native
+        run: |
+          rm -rf Payload AI-INPUT-Status-unsigned.ipa
+          mkdir Payload
+          cp -R build/AI\\ INPUT\\ Status.app Payload/
+          /usr/bin/zip -qry AI-INPUT-Status-unsigned.ipa Payload
+          unzip -l AI-INPUT-Status-unsigned.ipa
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: AI-INPUT-Status-unsigned
+          path: native/AI-INPUT-Status-unsigned.ipa
+          if-no-files-found: error
