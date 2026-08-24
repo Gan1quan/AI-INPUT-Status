@@ -43,14 +43,15 @@ jobs:
           test -f "$APP_PATH/AIInputStatus"
           /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP_PATH/Info.plist"
           /usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP_PATH/Info.plist"
-          rm -rf Payload AI-INPUT-Status-unsigned.ipa
+          rm -rf Payload AI-INPUT-Status-v1.0.1.ipa
           mkdir Payload
           cp -R "$APP_PATH" Payload/
-          /usr/bin/zip -qry AI-INPUT-Status-unsigned.ipa Payload
-          unzip -l AI-INPUT-Status-unsigned.ipa
+          /usr/bin/zip -qry AI-INPUT-Status-v1.0.1.ipa Payload
+          unzip -l AI-INPUT-Status-v1.0.1.ipa
+          unzip -p AI-INPUT-Status-v1.0.1.ipa Payload/AIInputStatus.app/Info.plist | plutil -p -
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: AI-INPUT-Status-unsigned
-          path: native/AI-INPUT-Status-unsigned.ipa
+          name: AI-INPUT-Status-v1.0.1
+          path: native/AI-INPUT-Status-v1.0.1.ipa
           if-no-files-found: error
