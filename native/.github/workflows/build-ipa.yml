@@ -14,8 +14,10 @@ jobs:
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode_15.4.app
       - name: Generate project
+        working-directory: native
         run: xcodegen generate
       - name: Build unsigned app
+        working-directory: native
         run: |
           xcodebuild \
             -project AIInputStatus.xcodeproj \
@@ -30,6 +32,7 @@ jobs:
             CONFIGURATION_BUILD_DIR="$PWD/build" \
             clean build
       - name: Package IPA
+        working-directory: native
         run: |
           rm -rf Payload AI-INPUT-Status-unsigned.ipa
           mkdir Payload
@@ -40,5 +43,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: AI-INPUT-Status-unsigned
-          path: AI-INPUT-Status-unsigned.ipa
+          path: native/AI-INPUT-Status-unsigned.ipa
           if-no-files-found: error
