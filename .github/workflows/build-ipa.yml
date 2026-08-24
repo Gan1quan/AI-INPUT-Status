@@ -38,9 +38,14 @@ jobs:
       - name: Package IPA
         working-directory: native
         run: |
+          APP_PATH="build/AIInputStatus.app"
+          test -d "$APP_PATH"
+          test -f "$APP_PATH/AIInputStatus"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP_PATH/Info.plist"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP_PATH/Info.plist"
           rm -rf Payload AI-INPUT-Status-unsigned.ipa
           mkdir Payload
-          cp -R "build/AI INPUT Status.app" Payload/
+          cp -R "$APP_PATH" Payload/
           /usr/bin/zip -qry AI-INPUT-Status-unsigned.ipa Payload
           unzip -l AI-INPUT-Status-unsigned.ipa
       - name: Upload IPA
