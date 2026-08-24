@@ -36,13 +36,15 @@ jobs:
             DEVELOPMENT_TEAM='' \
             CONFIGURATION_BUILD_DIR="$PWD/build" \
             clean build 2>&1 | tee xcodebuild.log
-      - name: Upload build log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: AI-INPUT-Status-build-log-${{ github.run_number }}
-          path: native/xcodebuild.log
-          if-no-files-found: warn
+      - name: Publish build diagnostics
+        if: failure()
+        working-directory: native
+        run: |
+          if [ -f xcodebuild.log ]; then
+            grep -E '(^|[[:space:]])(error|fatal error):' xcodebuild.log | head -40 | while IFS= read -r line; do
+              echo "::error::$line"
+            done
+          fi
       - name: Package IPA
         working-directory: native
         run: |
