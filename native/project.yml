@@ -20,7 +20,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.gan1quan.aiinputstatus
-        PRODUCT_NAME: AI INPUT Status
+        PRODUCT_NAME: AIInputStatus
         INFOPLIST_FILE: AIInputStatus/Info.plist
         CODE_SIGNING_ALLOWED: NO
         CODE_SIGNING_REQUIRED: NO
