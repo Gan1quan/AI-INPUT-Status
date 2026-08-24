@@ -12,6 +12,5 @@
 <key>UILaunchScreen</key><dict><key>UIColorName</key><string>LaunchBackground</string></dict>
 <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
 <key>ITSAppUsesNonExemptEncryption</key><false/>
-<key>BGTaskSchedulerPermittedIdentifiers</key><array><string>com.gan1quan.aiinputstatus.refresh</string></array>
 
 </dict></plist>
