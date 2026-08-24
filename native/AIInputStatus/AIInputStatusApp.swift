@@ -1,8 +1,11 @@
+import BackgroundTasks
 import Foundation
 import SwiftUI
+import UIKit
 
 @main
 struct AIInputStatusApp: App {
+    @UIApplicationDelegateAdaptor(AIInputStatusAppDelegate.self) private var appDelegate
     @StateObject private var store = StatusStore()
 
     var body: some Scene {
@@ -46,17 +49,40 @@ struct CachedStatus: Codable {
     var isStale: Bool { age > 240 }
 }
 
+struct Observation: Codable, Identifiable, Hashable {
+    let timestamp: Date
+    let model: String
+    let ok: Bool
+    let confirmationTime: Date
+    var id: String { "\(model)-\(timestamp.timeIntervalSince1970)" }
+}
+
+struct DailyStatistics {
+    let normal: TimeInterval
+    let abnormal: TimeInterval
+    let incidents: Int
+    var availability: Double {
+        let observed = normal + abnormal
+        return observed > 0 ? normal / observed * 100 : 0
+    }
+}
+
 @MainActor
 final class StatusStore: ObservableObject {
     @Published private(set) var cached: CachedStatus?
+    @Published private(set) var observations: [Observation] = []
     @Published private(set) var isRefreshing = false
     @Published private(set) var refreshCount = 0
     private let endpoint = URL(string: "https://status.input.im/api/status")!
-    private let cacheKey = "ai-input-status-cache.v2"
+    private let cacheKey = "ai-input-status-cache.v3"
+    private let legacyCacheKey = "ai-input-status-cache.v2"
+    private let observationKey = "ai-input-status-observations.v1"
     private var refreshTask: Task<Void, Never>?
 
-    init() {
+    init(autoRefresh: Bool = true) {
         loadCache()
+        loadObservations()
+        guard autoRefresh else { return }
         refreshTask = Task { [weak self] in
             await self?.refresh()
             while !Task.isCancelled {
@@ -84,6 +110,7 @@ final class StatusStore: ObservableObject {
             }
             let value = CachedStatus(snapshot: try decodeSnapshot(data), fetchedAt: Date(), lastError: nil)
             cached = value
+            recordObservations(for: value.snapshot, at: value.fetchedAt)
             refreshCount += 1
             saveCache(value)
         } catch {
@@ -94,6 +121,38 @@ final class StatusStore: ObservableObject {
 
     func handleScene(_ phase: ScenePhase) {
         if phase == .active { Task { await refresh() } }
+        if phase == .background { scheduleAIInputBackgroundRefresh() }
+    }
+
+    func statistics(for service: ServiceStatus) -> DailyStatistics {
+        let start = Calendar.current.startOfDay(for: Date())
+        let entries = observations.filter { $0.model == service.model && $0.timestamp >= start }.sorted { $0.timestamp < $1.timestamp }
+        guard let first = entries.first else { return DailyStatistics(normal: 0, abnormal: 0, incidents: 0) }
+        var normal: TimeInterval = 0
+        var abnormal: TimeInterval = 0
+        var incidents = first.ok ? 0 : 1
+        for index in entries.indices {
+            let current = entries[index]
+            let end = index + 1 < entries.count ? entries[index + 1].timestamp : Date()
+            let interval = max(0, end.timeIntervalSince(current.timestamp))
+            if current.ok { normal += interval } else { abnormal += interval }
+            if index + 1 < entries.count, current.ok && !entries[index + 1].ok { incidents += 1 }
+        }
+        return DailyStatistics(normal: normal, abnormal: abnormal, incidents: incidents)
+    }
+
+    func stateStartedAt(for service: ServiceStatus) -> Date? {
+        let entries = observations.filter { $0.model == service.model }.sorted { $0.timestamp < $1.timestamp }
+        guard let latest = entries.last else { return service.last?.timestamp }
+        for index in entries.indices.reversed() where index + 1 < entries.count && entries[index].ok != latest.ok {
+            return entries[index + 1].timestamp
+        }
+        return entries.first?.timestamp
+    }
+
+    static func performBackgroundRefresh() async {
+        let store = await MainActor.run { StatusStore(autoRefresh: false) }
+        await store.refresh()
     }
 
     private func decodeSnapshot(_ data: Data) throws -> Snapshot {
@@ -108,9 +167,25 @@ final class StatusStore: ObservableObject {
     }
 
     private func loadCache() {
-        guard let data = UserDefaults.standard.data(forKey: cacheKey),
-              let value = try? JSONDecoder().decode(CachedStatus.self, from: data) else { return }
+        let data = UserDefaults.standard.data(forKey: cacheKey) ?? UserDefaults.standard.data(forKey: legacyCacheKey)
+        guard let data, let value = try? JSONDecoder().decode(CachedStatus.self, from: data) else { return }
         cached = value
+    }
+
+    private func loadObservations() {
+        guard let data = UserDefaults.standard.data(forKey: observationKey) else { return }
+        observations = (try? JSONDecoder().decode([Observation].self, from: data)) ?? []
+    }
+
+    private func recordObservations(for snapshot: Snapshot, at date: Date) {
+        let newValues = snapshot.services.compactMap { service -> Observation? in
+            guard let last = service.last else { return nil }
+            return Observation(timestamp: date, model: service.model, ok: last.ok, confirmationTime: last.timestamp)
+        }
+        let cutoff = Calendar.current.date(byAdding: .day, value: -8, to: date) ?? date
+        observations = (observations + newValues).filter { $0.timestamp >= cutoff }.sorted { $0.timestamp < $1.timestamp }
+        guard let data = try? JSONEncoder().encode(observations) else { return }
+        UserDefaults.standard.set(data, forKey: observationKey)
     }
 
     private func saveCache(_ value: CachedStatus) {
@@ -179,18 +254,23 @@ struct ContentView: View {
     private func terminalBody(_ cached: CachedStatus) -> some View {
         VStack(alignment: .leading, spacing: 22) {
             ForEach(cached.snapshot.services) { service in
-                TerminalService(service: service, cached: cached)
+                TerminalService(
+                    service: service,
+                    cached: cached,
+                    statistics: store.statistics(for: service),
+                    stateStartedAt: store.stateStartedAt(for: service)
+                )
             }
             Rectangle().fill(TerminalPalette.rule).frame(height: 1).padding(.top, 2)
             HStack(alignment: .firstTextBaseline) {
                 Text("data \(clock(cached.snapshot.generatedAt))")
                 Spacer()
-                Text("run \(clock(cached.fetchedAt)) · Δ30s")
+                Text("run \(clock(cached.fetchedAt)) · 前台 30s")
             }
             .font(TerminalPalette.footer)
             .foregroundColor(cached.lastError == nil ? TerminalPalette.dim : TerminalPalette.amber)
             if cached.lastError != nil {
-                Text("last fetch failed · showing cached status")
+                Text("最后一次请求失败 · 正在显示缓存状态")
                     .font(TerminalPalette.footer)
                     .foregroundColor(TerminalPalette.amber)
             }
@@ -215,6 +295,8 @@ struct ContentView: View {
 struct TerminalService: View {
     let service: ServiceStatus
     let cached: CachedStatus
+    let statistics: DailyStatistics
+    let stateStartedAt: Date?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -256,7 +338,44 @@ struct TerminalService: View {
             }
             .font(TerminalPalette.axis)
             .foregroundColor(TerminalPalette.dim)
+            statusReport
         }
+    }
+
+    private var statusReport: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("\(stateIcon) 模型状态变更：\(stateDescription)")
+            Text("\(stateLabel == \"online\" ? \"正常运行\" : \"异常\")时间：\(formatDuration(Date().timeIntervalSince(stateStartedAt ?? service.last?.timestamp ?? Date())))")
+            Text("监控模型：\(service.model)")
+            Text("确认时间：\(confirmationTime)")
+            Text("今日统计（\(today), 北京时间）")
+                .padding(.top, 5)
+                .foregroundColor(TerminalPalette.primary)
+            Text("今日运行时间：\(formatDuration(statistics.normal))")
+            Text("今日异常时间：\(formatDuration(statistics.abnormal))")
+            Text("今日异常次数：\(statistics.incidents) 次")
+            Text("今日可用率：\(String(format: \"%.2f%%\", statistics.availability))")
+        }
+        .padding(.top, 8)
+        .padding(.leading, 22)
+        .font(TerminalPalette.report)
+        .foregroundColor(TerminalPalette.dim)
+    }
+
+    private var stateIcon: String { stateLabel == "online" ? "✓" : "✕" }
+    private var stateDescription: String {
+        switch stateLabel {
+        case "online": return "正常运行"
+        case "offline": return "发生异常"
+        case "stale": return "数据已过期"
+        default: return "尚未确认"
+        }
+    }
+    private var confirmationTime: String { (service.last?.timestamp ?? cached.snapshot.generatedAt).formatted(date: .numeric, time: .standard) }
+    private var today: String { Date().formatted(.iso8601.year().month().day()) }
+    private func formatDuration(_ interval: TimeInterval) -> String {
+        let minutes = max(0, Int(interval / 60))
+        return minutes < 60 ? String(format: "%.1f 分钟", interval / 60) : "\(minutes / 60) 小时 \(minutes % 60) 分钟"
     }
 
     private var isStale: Bool {
@@ -341,11 +460,12 @@ struct SettingsView: View {
             Form {
                 Section("刷新") {
                     LabeledContent("前台刷新周期", value: "30 秒")
+                    LabeledContent("后台刷新", value: "系统调度")
                     LabeledContent("本次启动刷新", value: "\(store.refreshCount) 次")
                 }
                 Section("关于") {
                     Link("打开官方状态页", destination: URL(string: "https://status.input.im/")!)
-                    Text("AI INPUT Status 3.0.0").foregroundColor(.secondary)
+                    Text("AI INPUT Status 3.1.0").foregroundColor(.secondary)
                 }
             }
             .navigationTitle("设置")
@@ -369,4 +489,5 @@ enum TerminalPalette {
     static let meta = Font.system(size: 12, weight: .regular, design: .monospaced)
     static let axis = Font.system(size: 10, weight: .regular, design: .monospaced)
     static let footer = Font.system(size: 11, weight: .regular, design: .monospaced)
+    static let report = Font.system(size: 11, weight: .regular, design: .monospaced)
 }
