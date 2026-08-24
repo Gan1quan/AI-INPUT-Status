@@ -40,7 +40,7 @@ jobs:
         run: |
           rm -rf Payload AI-INPUT-Status-unsigned.ipa
           mkdir Payload
-          cp -R build/AI\\ INPUT\\ Status.app Payload/
+          cp -R "build/AI INPUT Status.app" Payload/
           /usr/bin/zip -qry AI-INPUT-Status-unsigned.ipa Payload
           unzip -l AI-INPUT-Status-unsigned.ipa
       - name: Upload IPA
