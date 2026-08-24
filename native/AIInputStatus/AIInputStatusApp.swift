@@ -1,4 +1,3 @@
-import BackgroundTasks
 import Foundation
 import SwiftUI
 import UIKit
@@ -121,7 +120,6 @@ final class StatusStore: ObservableObject {
 
     func handleScene(_ phase: ScenePhase) {
         if phase == .active { Task { await refresh() } }
-        if phase == .background { scheduleAIInputBackgroundRefresh() }
     }
 
     func statistics(for service: ServiceStatus) -> DailyStatistics {
