@@ -2,43 +2,48 @@ import SwiftUI
 
 @main
 struct AIInputStatusApp: App {
-    @StateObject private var model = StatusStore()
+    @StateObject private var store = StatusStore()
 
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .environmentObject(model)
+                .environmentObject(store)
                 .preferredColorScheme(.dark)
         }
     }
 }
 
 struct Probe: Codable, Identifiable, Hashable {
-    let id = UUID()
     let timestamp: Date
     let ok: Bool
     let latencyMS: Int?
     let error: String?
+    var id: TimeInterval { timestamp.timeIntervalSince1970 }
 
-    enum CodingKeys: String, CodingKey { case timestamp = "ts", ok, latencyMS = "latency_ms", error }
+    enum CodingKeys: String, CodingKey {
+        case timestamp = "ts", ok, latencyMS = "latency_ms", error
+    }
 }
 
 struct ServiceStatus: Codable, Identifiable, Hashable {
     var id: String { model }
     let model: String
-    let uptimePercent: Double
+    let uptimePercent: Double?
     let last: Probe?
     let history: [Probe]
 
-    enum CodingKeys: String, CodingKey { case model, uptimePercent = "uptime_pct", last, history }
+    enum CodingKeys: String, CodingKey {
+        case model, uptimePercent = "uptime_pct", last, history
+    }
 }
 
 struct Snapshot: Codable, Hashable {
-    let allOK: Bool
     let generatedAt: Date
     let services: [ServiceStatus]
 
-    enum CodingKeys: String, CodingKey { case allOK = "all_ok", generatedAt = "generated_at", services }
+    enum CodingKeys: String, CodingKey {
+        case generatedAt = "generated_at", services
+    }
 }
 
 struct CachedStatus: Codable {
@@ -46,20 +51,44 @@ struct CachedStatus: Codable {
     let fetchedAt: Date
     let lastError: String?
 
-    var isStale: Bool { Date().timeIntervalSince(fetchedAt) > 240 }
+    var age: TimeInterval { Date().timeIntervalSince(fetchedAt) }
+    var isStale: Bool { age > 240 }
+}
+
+enum ServiceHealth {
+    case operational
+    case issue
+    case stale
+    case unknown
+
+    var color: Color {
+        switch self {
+        case .operational: return Palette.mint
+        case .issue: return Palette.coral
+        case .stale: return Palette.amber
+        case .unknown: return Palette.muted
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .operational: return "运行正常"
+        case .issue: return "需要关注"
+        case .stale: return "数据过期"
+        case .unknown: return "等待数据"
+        }
+    }
 }
 
 @MainActor
 final class StatusStore: ObservableObject {
     @Published private(set) var cached: CachedStatus?
     @Published private(set) var isRefreshing = false
-    @Published private(set) var lastAttempt: Date?
     @Published private(set) var refreshCount = 0
-    @Published var notificationsEnabled = false
 
     private let endpoint = URL(string: "https://status.input.im/api/status")!
+    private let cacheKey = "ai-input-status-cache.v2"
     private var refreshTask: Task<Void, Never>?
-    private let cacheKey = "ai-input-status-cache.v1"
 
     init() {
         loadCache()
@@ -78,7 +107,6 @@ final class StatusStore: ObservableObject {
     func refresh() async {
         guard !isRefreshing else { return }
         isRefreshing = true
-        lastAttempt = Date()
         defer { isRefreshing = false }
         do {
             var request = URLRequest(url: endpoint)
@@ -89,15 +117,13 @@ final class StatusStore: ObservableObject {
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
                 throw URLError(.badServerResponse)
             }
-            let snapshot = try decodeSnapshot(data)
-            let value = CachedStatus(snapshot: snapshot, fetchedAt: Date(), lastError: nil)
+            let value = CachedStatus(snapshot: try decodeSnapshot(data), fetchedAt: Date(), lastError: nil)
             cached = value
             refreshCount += 1
             saveCache(value)
         } catch {
-            if let old = cached {
-                cached = CachedStatus(snapshot: old.snapshot, fetchedAt: old.fetchedAt, lastError: error.localizedDescription)
-            }
+            guard let old = cached else { return }
+            cached = CachedStatus(snapshot: old.snapshot, fetchedAt: old.fetchedAt, lastError: error.localizedDescription)
         }
     }
 
@@ -108,19 +134,23 @@ final class StatusStore: ObservableObject {
     private func decodeSnapshot(_ data: Data) throws -> Snapshot {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .secondsSince1970
-        let value = try decoder.decode(Snapshot.self, from: data)
-        let selected = value.services.filter { ["gpt-5.6-sol", "gpt-5.6-terra"].contains($0.model) }
-        guard !selected.isEmpty else { throw URLError(.cannotParseResponse) }
-        return Snapshot(allOK: selected.allSatisfy { $0.last?.ok == true }, generatedAt: value.generatedAt, services: selected)
+        let raw = try decoder.decode(Snapshot.self, from: data)
+        let requested = ["gpt-5.6-sol", "gpt-5.6-terra"]
+        let services = requested.map { model in
+            raw.services.first(where: { $0.model == model }) ?? ServiceStatus(model: model, uptimePercent: nil, last: nil, history: [])
+        }
+        return Snapshot(generatedAt: raw.generatedAt, services: services)
     }
 
     private func loadCache() {
-        guard let data = UserDefaults.standard.data(forKey: cacheKey), let value = try? JSONDecoder().decode(CachedStatus.self, from: data) else { return }
+        guard let data = UserDefaults.standard.data(forKey: cacheKey),
+              let value = try? JSONDecoder().decode(CachedStatus.self, from: data) else { return }
         cached = value
     }
 
     private func saveCache(_ value: CachedStatus) {
-        if let data = try? JSONEncoder().encode(value) { UserDefaults.standard.set(data, forKey: cacheKey) }
+        guard let data = try? JSONEncoder().encode(value) else { return }
+        UserDefaults.standard.set(data, forKey: cacheKey)
     }
 }
 
@@ -131,23 +161,23 @@ struct ContentView: View {
 
     var body: some View {
         NavigationView {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    header
+            ScrollView(showsIndicators: false) {
+                VStack(spacing: 24) {
+                    topBar
                     if let cached = store.cached {
-                        overview(cached)
-                        serviceCards(cached.snapshot.services)
-                        history(cached.snapshot.services)
+                        StatusHero(status: overallHealth(cached), cached: cached)
+                        serviceSection(cached)
+                        historySection(cached)
                         footer(cached)
                     } else {
                         loading
                     }
                 }
                 .padding(.horizontal, 20)
-                .padding(.top, 12)
-                .padding(.bottom, 30)
+                .padding(.top, 14)
+                .padding(.bottom, 34)
             }
-            .background(Background().ignoresSafeArea())
+            .background(AppBackground().ignoresSafeArea())
             .navigationBarHidden(true)
             .refreshable { await store.refresh() }
             .sheet(isPresented: $showingSettings) { SettingsView().environmentObject(store) }
@@ -156,97 +186,325 @@ struct ContentView: View {
         .onChange(of: scenePhase) { store.handleScene($0) }
     }
 
-    private var header: some View {
-        HStack(alignment: .top) {
+    private var topBar: some View {
+        HStack(alignment: .center) {
             VStack(alignment: .leading, spacing: 5) {
-                Text("AI.INPUT.IM").font(.system(size: 28, weight: .bold, design: .rounded)).foregroundColor(.white)
-                Text("模型服务状态").font(.subheadline).foregroundColor(.white.opacity(0.55))
+                Text("AI INPUT")
+                    .font(.system(size: 22, weight: .bold, design: .rounded))
+                    .tracking(1.1)
+                Text("服务可用性监测")
+                    .font(.subheadline)
+                    .foregroundColor(Palette.secondaryText)
             }
             Spacer()
-            HStack(spacing: 10) {
-                Button { Task { await store.refresh() } } label: {
-                    Image(systemName: store.isRefreshing ? "arrow.triangle.2.circlepath" : "arrow.clockwise")
-                        .rotationEffect(.degrees(store.isRefreshing ? 360 : 0))
+            Button { Task { await store.refresh() } } label: {
+                Image(systemName: "arrow.clockwise")
+                    .rotationEffect(.degrees(store.isRefreshing ? 360 : 0))
+                    .animation(store.isRefreshing ? .linear(duration: 0.85).repeatForever(autoreverses: false) : .default, value: store.isRefreshing)
+            }
+            .buttonStyle(CircleActionStyle())
+            Button { showingSettings = true } label: { Image(systemName: "gearshape") }
+                .buttonStyle(CircleActionStyle())
+        }
+    }
+
+    private func serviceSection(_ cached: CachedStatus) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(title: "服务状态", detail: "自动刷新 · 30 秒")
+            ForEach(cached.snapshot.services) { service in
+                ServiceCard(service: service, health: health(for: service, cached: cached))
+            }
+        }
+    }
+
+    private func historySection(_ cached: CachedStatus) -> some View {
+        VStack(alignment: .leading, spacing: 13) {
+            SectionHeader(title: "最近探测", detail: "每格代表一次记录")
+            VStack(spacing: 17) {
+                ForEach(cached.snapshot.services) { service in
+                    HistoryRow(service: service)
                 }
-                .buttonStyle(IconButtonStyle())
-                Button { showingSettings = true } label: { Image(systemName: "slider.horizontal.3") }
-                    .buttonStyle(IconButtonStyle())
             }
+            .padding(18)
+            .background(Panel(cornerRadius: 22))
         }
     }
 
-    private func overview(_ value: CachedStatus) -> some View {
-        let ok = value.snapshot.allOK && !value.isStale
-        return HStack(spacing: 15) {
+    private func footer(_ cached: CachedStatus) -> some View {
+        VStack(spacing: 7) {
+            Text("状态源：status.input.im · 更新于 \(relativeTime(cached.fetchedAt))")
+            if let error = cached.lastError {
+                Text("本机刷新未成功，正在展示上次有效数据：\(friendlyError(error))")
+                    .foregroundColor(Palette.amber)
+            }
+        }
+        .font(.caption)
+        .multilineTextAlignment(.center)
+        .foregroundColor(Palette.secondaryText)
+        .frame(maxWidth: .infinity)
+    }
+
+    private var loading: some View {
+        VStack(spacing: 14) {
+            ProgressView().tint(.white)
+            Text("正在获取状态数据")
+                .foregroundColor(Palette.secondaryText)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 150)
+    }
+
+    private func overallHealth(_ cached: CachedStatus) -> ServiceHealth {
+        if cached.isStale { return .stale }
+        let states = cached.snapshot.services.map { health(for: $0, cached: cached) }
+        if states.allSatisfy({ $0 == .operational }) { return .operational }
+        if states.contains(where: { health in
+            if case .issue = health { return true }
+            return false
+        }) { return .issue }
+        return .unknown
+    }
+
+    private func health(for service: ServiceStatus, cached: CachedStatus) -> ServiceHealth {
+        if cached.isStale { return .stale }
+        guard let probe = service.last else { return .unknown }
+        if Date().timeIntervalSince(probe.timestamp) > 600 { return .stale }
+        return probe.ok ? .operational : .issue
+    }
+
+    private func relativeTime(_ date: Date) -> String {
+        let seconds = max(0, Int(Date().timeIntervalSince(date)))
+        if seconds < 10 { return "刚刚" }
+        if seconds < 60 { return "\(seconds) 秒前" }
+        return "\(seconds / 60) 分钟前"
+    }
+
+    private func friendlyError(_ error: String) -> String {
+        error.contains("timed out") ? "请求超时" : "网络暂不可用"
+    }
+}
+
+struct StatusHero: View {
+    let status: ServiceHealth
+    let cached: CachedStatus
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 16) {
             ZStack {
-                Circle().stroke((ok ? Color.green : Color.red).opacity(0.22), lineWidth: 8)
-                Circle().trim(from: 0, to: 0.76).stroke(ok ? Color.green : Color.red, style: StrokeStyle(lineWidth: 8, lineCap: .round)).rotationEffect(.degrees(-90))
-                Image(systemName: ok ? "checkmark" : "exclamationmark").font(.title2.bold()).foregroundColor(ok ? .green : .red)
-            }.frame(width: 68, height: 68)
-            VStack(alignment: .leading, spacing: 6) {
-                Text(value.isStale ? "数据已过期" : (ok ? "全部正常" : "服务异常")).font(.title2.bold()).foregroundColor(.white)
-                Text(ok ? "两个模型均可用" : "请查看下方服务详情").font(.subheadline).foregroundColor(.white.opacity(0.55))
+                Circle().fill(status.color.opacity(0.15)).frame(width: 54, height: 54)
+                Circle().stroke(status.color.opacity(0.42), lineWidth: 1).frame(width: 54, height: 54)
+                Image(systemName: status == .operational ? "checkmark" : "exclamationmark")
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundColor(status.color)
             }
-            Spacer()
-        }
-        .padding(18).background(Glass()).overlay(RoundedRectangle(cornerRadius: 22).stroke(Color.white.opacity(0.08)))
-    }
-
-    private func serviceCards(_ services: [ServiceStatus]) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            sectionTitle("服务概览", trailing: "前台每 30 秒更新")
-            ForEach(services) { service in ServiceCard(service: service) }
-        }
-    }
-
-    private func history(_ services: [ServiceStatus]) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            sectionTitle("最近探测", trailing: "60 次窗口")
-            ForEach(services) { service in
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack { Text(service.model).font(.subheadline.weight(.semibold)).foregroundColor(.white); Spacer(); Text("成功率 \(observedRate(service), specifier: "%.1f")%").font(.caption).foregroundColor(.white.opacity(0.5)) }
-                    HistoryBars(probes: Array(service.history.suffix(60)))
-                }.padding(16).background(Glass())
+            VStack(alignment: .leading, spacing: 7) {
+                Text(status.label).font(.system(size: 23, weight: .bold, design: .rounded))
+                Text(detail).font(.subheadline).foregroundColor(Palette.secondaryText)
+                HStack(spacing: 6) {
+                    Circle().fill(status.color).frame(width: 6, height: 6)
+                    Text("数据生成于 \(cached.snapshot.generatedAt.formatted(date: .omitted, time: .shortened))")
+                }
+                .font(.caption)
+                .foregroundColor(Palette.secondaryText)
             }
+            Spacer(minLength: 0)
+        }
+        .padding(20)
+        .background(HeroPanel(color: status.color))
+    }
+
+    private var detail: String {
+        switch status {
+        case .operational: return "当前两个模型均通过最近一次探测"
+        case .issue: return "至少一个模型最近一次探测未通过"
+        case .stale: return "展示的是超过 4 分钟的缓存数据"
+        case .unknown: return "状态源尚未提供可判断的结果"
         }
     }
-
-    private func footer(_ value: CachedStatus) -> some View {
-        VStack(spacing: 6) {
-            Text("数据时间  \(value.snapshot.generatedAt.formatted(date: .omitted, time: .shortened))  ·  更新于 \(value.fetchedAt.formatted(date: .omitted, time: .shortened))").font(.caption).foregroundColor(.white.opacity(0.45))
-            if let error = value.lastError { Text("上次请求失败：\(error)").font(.caption2).foregroundColor(.orange).lineLimit(2) }
-        }.frame(maxWidth: .infinity)
-    }
-
-    private var loading: some View { VStack(spacing: 12) { ProgressView().tint(.white); Text("正在连接状态服务器").foregroundColor(.white.opacity(0.55)) }.frame(maxWidth: .infinity).padding(.top, 120) }
-    private func sectionTitle(_ title: String, trailing: String) -> some View { HStack { Text(title).font(.headline).foregroundColor(.white); Spacer(); Text(trailing).font(.caption).foregroundColor(.white.opacity(0.42)) } }
-    private func observedRate(_ service: ServiceStatus) -> Double { let probes = service.history.filter { $0.ok }; return service.history.isEmpty ? 0 : Double(probes.count) / Double(service.history.count) * 100 }
 }
 
 struct ServiceCard: View {
     let service: ServiceStatus
+    let health: ServiceHealth
+
     var body: some View {
-        HStack(spacing: 14) {
-            Circle().fill(service.last?.ok == true ? Color.green : Color.red).frame(width: 12, height: 12).shadow(color: (service.last?.ok == true ? Color.green : Color.red).opacity(0.65), radius: 7)
-            VStack(alignment: .leading, spacing: 5) { Text(service.model).font(.headline).foregroundColor(.white); Text(service.last?.ok == true ? "在线 · 最近响应正常" : (service.last?.error ?? "最近探测失败")).font(.caption).foregroundColor(.white.opacity(0.5)).lineLimit(1) }
-            Spacer()
-            VStack(alignment: .trailing, spacing: 5) { Text("\(service.uptimePercent, specifier: "%.1f")%").font(.headline.monospacedDigit()).foregroundColor(.white); Text(service.last?.latencyMS.map { "\($0) ms" } ?? "--").font(.caption.monospacedDigit()).foregroundColor(.white.opacity(0.48)) }
-        }.padding(16).background(Glass()).overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.white.opacity(0.07)))
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 7) {
+                    Text(service.model)
+                        .font(.system(size: 18, weight: .semibold, design: .rounded))
+                    HStack(spacing: 7) {
+                        Circle().fill(health.color).frame(width: 7, height: 7)
+                        Text(health.label)
+                    }
+                    .font(.caption.weight(.medium))
+                    .foregroundColor(health.color)
+                }
+                Spacer()
+                VStack(alignment: .trailing, spacing: 4) {
+                    Text(uptime)
+                        .font(.system(size: 20, weight: .bold, design: .rounded).monospacedDigit())
+                    Text("统计可用率")
+                        .font(.caption2)
+                        .foregroundColor(Palette.secondaryText)
+                }
+            }
+            Divider().background(Color.white.opacity(0.09))
+            HStack {
+                Label(probeDetail, systemImage: health == .operational ? "bolt.horizontal.circle" : "waveform.path.ecg")
+                    .lineLimit(1)
+                    .font(.caption)
+                    .foregroundColor(Palette.secondaryText)
+                Spacer()
+                Text(lastTime)
+                    .font(.caption.monospacedDigit())
+                    .foregroundColor(Palette.secondaryText)
+            }
+        }
+        .padding(18)
+        .background(Panel(cornerRadius: 22))
+        .overlay(RoundedRectangle(cornerRadius: 22).stroke(health.color.opacity(0.15), lineWidth: 1))
+    }
+
+    private var uptime: String {
+        guard let value = service.uptimePercent else { return "--" }
+        return String(format: "%.1f%%", value)
+    }
+
+    private var probeDetail: String {
+        guard let probe = service.last else { return "状态源未返回最近探测" }
+        if probe.ok { return probe.latencyMS.map { "最近响应 \($0) ms" } ?? "最近探测通过" }
+        if let error = probe.error, !error.isEmpty { return "探测返回：\(error)" }
+        return "最近探测未通过"
+    }
+
+    private var lastTime: String {
+        guard let date = service.last?.timestamp else { return "--" }
+        return date.formatted(date: .omitted, time: .shortened)
     }
 }
 
-struct HistoryBars: View {
+struct HistoryRow: View {
+    let service: ServiceStatus
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack {
+                Text(service.model).font(.subheadline.weight(.semibold))
+                Spacer()
+                Text(summary).font(.caption).foregroundColor(Palette.secondaryText)
+            }
+            HistoryStrip(probes: Array(service.history.suffix(36)))
+        }
+    }
+
+    private var summary: String {
+        guard !service.history.isEmpty else { return "暂无历史记录" }
+        let success = service.history.filter(\.ok).count
+        return "\(success) / \(service.history.count) 次通过"
+    }
+}
+
+struct HistoryStrip: View {
     let probes: [Probe]
-    var body: some View { HStack(alignment: .bottom, spacing: 2) { ForEach(probes) { probe in RoundedRectangle(cornerRadius: 2).fill(probe.ok ? Color.green.opacity(0.9) : Color.red.opacity(0.9)).frame(maxWidth: .infinity, minHeight: probe.ok ? 18 : 7, maxHeight: probe.ok ? 18 : 7) } }.frame(height: 18) }
+
+    var body: some View {
+        GeometryReader { geometry in
+            let count = max(probes.count, 36)
+            let width = max(3, (geometry.size.width - CGFloat(count - 1) * 3) / CGFloat(count))
+            HStack(spacing: 3) {
+                ForEach(0..<count, id: \.self) { index in
+                    let probe = index < count - probes.count ? nil : probes[index - (count - probes.count)]
+                    Capsule()
+                        .fill(probe.map { $0.ok ? Palette.mint : Palette.coral } ?? Color.white.opacity(0.09))
+                        .frame(width: width, height: probe == nil ? 8 : 18)
+                }
+            }
+        }
+        .frame(height: 18)
+        .accessibilityLabel("最近探测记录")
+    }
 }
 
 struct SettingsView: View {
     @EnvironmentObject private var store: StatusStore
+
     var body: some View {
-        NavigationView { Form { Section("刷新") { LabeledContent("前台刷新周期", value: "30 秒"); LabeledContent("刷新次数", value: "\(store.refreshCount)") }; Section("信息") { Link("打开官方状态页", destination: URL(string: "https://status.input.im/")!); Text("AI INPUT Status 1.0.0").foregroundColor(.secondary) } }.navigationTitle("设置").navigationBarTitleDisplayMode(.inline) }
+        NavigationView {
+            Form {
+                Section("刷新") {
+                    LabeledContent("前台刷新周期", value: "30 秒")
+                    LabeledContent("本次启动刷新", value: "\(store.refreshCount) 次")
+                }
+                Section("关于") {
+                    Link("打开官方状态页", destination: URL(string: "https://status.input.im/")!)
+                    Text("AI INPUT Status 2.0.0")
+                        .foregroundColor(.secondary)
+                }
+            }
+            .navigationTitle("设置")
+            .navigationBarTitleDisplayMode(.inline)
+        }
     }
 }
 
-struct Background: View { var body: some View { LinearGradient(colors: [Color(red: 0.035, green: 0.045, blue: 0.085), Color(red: 0.075, green: 0.09, blue: 0.16)], startPoint: .topLeading, endPoint: .bottomTrailing) } }
-struct Glass: View { var body: some View { RoundedRectangle(cornerRadius: 20).fill(Color.white.opacity(0.075)).background(.ultraThinMaterial).clipShape(RoundedRectangle(cornerRadius: 20)) } }
-struct IconButtonStyle: ButtonStyle { func makeBody(configuration: Configuration) -> some View { configuration.label.font(.system(size: 16, weight: .semibold)).foregroundColor(.white).frame(width: 40, height: 40).background(Color.white.opacity(configuration.isPressed ? 0.18 : 0.1)).clipShape(Circle()) } }
+struct SectionHeader: View {
+    let title: String
+    let detail: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(title).font(.headline)
+            Spacer()
+            Text(detail).font(.caption).foregroundColor(Palette.secondaryText)
+        }
+    }
+}
+
+struct Palette {
+    static let mint = Color(red: 0.30, green: 0.90, blue: 0.70)
+    static let coral = Color(red: 1.00, green: 0.43, blue: 0.46)
+    static let amber = Color(red: 0.98, green: 0.72, blue: 0.30)
+    static let muted = Color(red: 0.56, green: 0.61, blue: 0.72)
+    static let secondaryText = Color.white.opacity(0.57)
+}
+
+struct AppBackground: View {
+    var body: some View {
+        ZStack {
+            Color(red: 0.025, green: 0.035, blue: 0.075)
+            Circle().fill(Color(red: 0.14, green: 0.32, blue: 0.53).opacity(0.24)).blur(radius: 75).offset(x: 155, y: -290)
+            Circle().fill(Palette.mint.opacity(0.10)).blur(radius: 90).offset(x: -175, y: 340)
+        }
+    }
+}
+
+struct Panel: View {
+    let cornerRadius: CGFloat
+    var body: some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(Color.white.opacity(0.07))
+            .background(.ultraThinMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+    }
+}
+
+struct HeroPanel: View {
+    let color: Color
+    var body: some View {
+        RoundedRectangle(cornerRadius: 28, style: .continuous)
+            .fill(LinearGradient(colors: [color.opacity(0.24), Color.white.opacity(0.075)], startPoint: .topLeading, endPoint: .bottomTrailing))
+            .overlay(RoundedRectangle(cornerRadius: 28, style: .continuous).stroke(Color.white.opacity(0.13), lineWidth: 1))
+    }
+}
+
+struct CircleActionStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 16, weight: .semibold))
+            .foregroundColor(.white)
+            .frame(width: 40, height: 40)
+            .background(Color.white.opacity(configuration.isPressed ? 0.18 : 0.10))
+            .clipShape(Circle())
+    }
+}
