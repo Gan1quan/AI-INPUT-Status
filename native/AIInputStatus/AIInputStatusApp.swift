@@ -343,7 +343,7 @@ struct TerminalService: View {
     private var statusReport: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("\(stateIcon) 模型状态变更：\(stateDescription)")
-            Text("\(stateLabel == \"online\" ? \"正常运行\" : \"异常\")时间：\(formatDuration(Date().timeIntervalSince(stateStartedAt ?? service.last?.timestamp ?? Date())))")
+            Text("\(stateDescription)时间：\(formatDuration(Date().timeIntervalSince(stateStartedAt ?? service.last?.timestamp ?? Date())))")
             Text("监控模型：\(service.model)")
             Text("确认时间：\(confirmationTime)")
             Text("今日统计（\(today), 北京时间）")
@@ -352,7 +352,7 @@ struct TerminalService: View {
             Text("今日运行时间：\(formatDuration(statistics.normal))")
             Text("今日异常时间：\(formatDuration(statistics.abnormal))")
             Text("今日异常次数：\(statistics.incidents) 次")
-            Text("今日可用率：\(String(format: \"%.2f%%\", statistics.availability))")
+            Text("今日可用率：\(availabilityText)")
         }
         .padding(.top, 8)
         .padding(.leading, 22)
@@ -360,7 +360,12 @@ struct TerminalService: View {
         .foregroundColor(TerminalPalette.dim)
     }
 
+    private var availabilityText: String {
+        String(format: "%.2f%%", statistics.availability)
+    }
+
     private var stateIcon: String { stateLabel == "online" ? "✓" : "✕" }
+
     private var stateDescription: String {
         switch stateLabel {
         case "online": return "正常运行"
