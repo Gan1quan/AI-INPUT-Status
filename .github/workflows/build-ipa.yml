@@ -23,6 +23,7 @@ jobs:
       - name: Build unsigned app
         working-directory: native
         run: |
+          set -o pipefail
           xcodebuild \
             -project AIInputStatus.xcodeproj \
             -scheme AIInputStatus \
@@ -34,7 +35,14 @@ jobs:
             CODE_SIGN_IDENTITY='' \
             DEVELOPMENT_TEAM='' \
             CONFIGURATION_BUILD_DIR="$PWD/build" \
-            clean build
+            clean build 2>&1 | tee xcodebuild.log
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AI-INPUT-Status-build-log-${{ github.run_number }}
+          path: native/xcodebuild.log
+          if-no-files-found: warn
       - name: Package IPA
         working-directory: native
         run: |
