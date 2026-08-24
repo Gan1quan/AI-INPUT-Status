@@ -2,6 +2,7 @@ name: Build IPA
 on:
   workflow_dispatch:
   push:
+    branches: ["main"]
     tags: ["v*", "native-v*"]
 
 jobs:
