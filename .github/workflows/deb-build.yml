@@ -10,32 +10,43 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
-      - name: Build rootless daemon
+      - name: Build rootless arm64e daemon
         run: |
           mkdir -p rootless-deb/layout/var/jb/usr/libexec
-          xcrun clang -target arm64-apple-ios16.1 -isysroot "$(xcrun --sdk iphoneos --show-sdk-path)" \
+          xcrun clang -target arm64e-apple-ios16.1 -isysroot "$(xcrun --sdk iphoneos --show-sdk-path)" \
             -fobjc-arc -framework Foundation -o rootless-deb/layout/var/jb/usr/libexec/aiinputstatusd rootless-deb/aiinputstatusd.m
           chmod 755 rootless-deb/layout/var/jb/usr/libexec/aiinputstatusd
+          file rootless-deb/layout/var/jb/usr/libexec/aiinputstatusd | grep -q 'arm64e'
       - name: Package and verify DEB
         run: |
-          chmod 755 rootless-deb/DEBIAN/postinst rootless-deb/DEBIAN/prerm
+          set -eu
+          chmod 755 rootless-deb/DEBIAN/postinst rootless-deb/DEBIAN/prerm rootless-deb/DEBIAN/postrm
+          rm -rf dist deb-work
           mkdir -p dist deb-work/control deb-work/data
           cp rootless-deb/DEBIAN/control deb-work/control/control
           cp rootless-deb/DEBIAN/postinst deb-work/control/postinst
           cp rootless-deb/DEBIAN/prerm deb-work/control/prerm
-          chmod 755 deb-work/control/postinst deb-work/control/prerm
+          cp rootless-deb/DEBIAN/postrm deb-work/control/postrm
+          chmod 755 deb-work/control/postinst deb-work/control/prerm deb-work/control/postrm
           cp -R rootless-deb/layout/* deb-work/data/
           printf '2.0\n' > deb-work/debian-binary
-          tar -C deb-work/control --format=ustar -czf dist/control.tar.gz control postinst prerm
+          tar -C deb-work/control --format=ustar -czf dist/control.tar.gz control postinst prerm postrm
           tar -C deb-work/data --format=ustar -czf dist/data.tar.gz .
-          ar -r dist/AI-INPUT-Status-Background-v1.0.0.deb deb-work/debian-binary dist/control.tar.gz dist/data.tar.gz
-          ar -t dist/AI-INPUT-Status-Background-v1.0.0.deb
+          ar -r dist/AI-INPUT-Status-Background-v1.0.1-arm64e.deb deb-work/debian-binary dist/control.tar.gz dist/data.tar.gz
+          test "$(ar -t dist/AI-INPUT-Status-Background-v1.0.1-arm64e.deb | tr '\n' ' ')" = "debian-binary control.tar.gz data.tar.gz "
           grep -q '^Package: com.gan1quan.aiinputstatus.background$' deb-work/control/control
+          grep -q '^Version: 1.0.1$' deb-work/control/control
           grep -q '^Architecture: iphoneos-arm64$' deb-work/control/control
+          ! grep -q -- '--install' deb-work/control/postinst
+          sh -n deb-work/control/postinst
+          sh -n deb-work/control/prerm
+          sh -n deb-work/control/postrm
           test -x rootless-deb/layout/var/jb/usr/libexec/aiinputstatusd
-          shasum -a 256 dist/AI-INPUT-Status-Background-v1.0.0.deb
+          tar -tzf dist/data.tar.gz | grep -q '^./var/jb/usr/libexec/aiinputstatusd$'
+          tar -tzf dist/data.tar.gz | grep -q '^./var/jb/Library/LaunchDaemons/com.gan1quan.aiinputstatus.background.plist$'
+          shasum -a 256 dist/AI-INPUT-Status-Background-v1.0.1-arm64e.deb
       - uses: actions/upload-artifact@v4
         with:
-          name: AI-INPUT-Status-Background-v1.0.0
-          path: dist/AI-INPUT-Status-Background-v1.0.0.deb
+          name: AI-INPUT-Status-Background-v1.0.1-arm64e
+          path: dist/AI-INPUT-Status-Background-v1.0.1-arm64e.deb
           if-no-files-found: error
