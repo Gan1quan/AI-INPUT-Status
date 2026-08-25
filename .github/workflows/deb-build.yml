@@ -12,19 +12,25 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build rootless daemon
         run: |
-          brew install dpkg
           xcrun clang -target arm64-apple-ios16.1 -isysroot "$(xcrun --sdk iphoneos --show-sdk-path)" \
             -fobjc-arc -framework Foundation -o rootless-deb/layout/var/jb/usr/libexec/aiinputstatusd rootless-deb/aiinputstatusd.m
           chmod 755 rootless-deb/layout/var/jb/usr/libexec/aiinputstatusd
       - name: Package and verify DEB
         run: |
           chmod 755 rootless-deb/DEBIAN/postinst rootless-deb/DEBIAN/prerm
-          mkdir -p dist
-          dpkg-deb --build --root-owner-group rootless-deb dist/AI-INPUT-Status-Background-v1.0.0.deb
-          dpkg-deb --info dist/AI-INPUT-Status-Background-v1.0.0.deb
-          dpkg-deb --contents dist/AI-INPUT-Status-Background-v1.0.0.deb
-          test "$(dpkg-deb -f dist/AI-INPUT-Status-Background-v1.0.0.deb Package)" = "com.gan1quan.aiinputstatus.background"
-          test "$(dpkg-deb -f dist/AI-INPUT-Status-Background-v1.0.0.deb Architecture)" = "iphoneos-arm64"
+          mkdir -p dist deb-work/control deb-work/data
+          cp rootless-deb/DEBIAN/control deb-work/control/control
+          cp rootless-deb/DEBIAN/postinst deb-work/control/postinst
+          cp rootless-deb/DEBIAN/prerm deb-work/control/prerm
+          chmod 755 deb-work/control/postinst deb-work/control/prerm
+          cp -R rootless-deb/layout/* deb-work/data/
+          printf '2.0\n' > deb-work/debian-binary
+          tar -C deb-work/control --format=ustar -czf dist/control.tar.gz control postinst prerm
+          tar -C deb-work/data --format=ustar -czf dist/data.tar.gz .
+          ar -r dist/AI-INPUT-Status-Background-v1.0.0.deb deb-work/debian-binary dist/control.tar.gz dist/data.tar.gz
+          ar -t dist/AI-INPUT-Status-Background-v1.0.0.deb
+          grep -q '^Package: com.gan1quan.aiinputstatus.background$' deb-work/control/control
+          grep -q '^Architecture: iphoneos-arm64$' deb-work/control/control
           test -x rootless-deb/layout/var/jb/usr/libexec/aiinputstatusd
           shasum -a 256 dist/AI-INPUT-Status-Background-v1.0.0.deb
       - uses: actions/upload-artifact@v4
