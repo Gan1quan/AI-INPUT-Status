@@ -12,6 +12,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build rootless daemon
         run: |
+          mkdir -p rootless-deb/layout/var/jb/usr/libexec
           xcrun clang -target arm64-apple-ios16.1 -isysroot "$(xcrun --sdk iphoneos --show-sdk-path)" \
             -fobjc-arc -framework Foundation -o rootless-deb/layout/var/jb/usr/libexec/aiinputstatusd rootless-deb/aiinputstatusd.m
           chmod 755 rootless-deb/layout/var/jb/usr/libexec/aiinputstatusd
