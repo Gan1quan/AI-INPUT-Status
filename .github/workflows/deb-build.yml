@@ -23,6 +23,7 @@ jobs:
       - name: Build SpringBoard tweak
         run: |
           set -euxo pipefail
+          chmod 755 layout/DEBIAN/postinst layout/DEBIAN/prerm layout/DEBIAN/postrm
           make clean package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide
           test -n "$(find packages -name '*.deb' -print -quit)"
       - name: Build arm64e daemon
