@@ -694,13 +694,6 @@ struct SettingsView: View {
                             .font(.footnote).foregroundColor(.secondary)
                     }
                 }
-                Section("后台实际记录") {
-                    LabeledContent("系统 fetch 调用", value: "\(store.diagnostics.backgroundFetches) 次")
-                    LabeledContent("后台成功 / 失败", value: "\(store.diagnostics.backgroundSuccesses) / \(store.diagnostics.backgroundFailures)")
-                    Text("后台由 SpringBoard Darwin 通知唤醒 DEB；iOS 系统 fetch 仅作为兼容回退。这里记录 IPA 实际回调与请求结果。")
-                        .font(.footnote)
-                        .foregroundColor(.secondary)
-                }
                 Section("实际请求记录") {
                     LabeledContent("最后一次尝试", value: diagnosticDate(store.diagnostics.lastAttemptAt))
                     LabeledContent("最后一次成功", value: diagnosticDate(store.diagnostics.lastSuccessAt))
@@ -715,7 +708,7 @@ struct SettingsView: View {
                 }
                 Section("关于") {
                     Link("打开官方状态页", destination: URL(string: "https://status.input.im/")!)
-                    Text("AI INPUT Status 3.3.0").foregroundColor(.secondary)
+                    Text("AI INPUT Status 3.3.1").foregroundColor(.secondary)
                 }
             }
             .navigationTitle("设置")
