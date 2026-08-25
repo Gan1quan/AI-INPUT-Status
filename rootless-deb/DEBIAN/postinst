@@ -1,0 +1,12 @@
+#!/bin/sh
+set -e
+JBROOT="/var/jb"
+DAEMON="$JBROOT/usr/libexec/aiinputstatusd"
+PLIST="$JBROOT/Library/LaunchDaemons/com.gan1quan.aiinputstatus.background.plist"
+if [ -x "$DAEMON" ]; then
+  "$DAEMON" --install >/dev/null 2>&1 || true
+fi
+if [ -f "$PLIST" ]; then
+  launchctl bootstrap system "$PLIST" >/dev/null 2>&1 || launchctl load "$PLIST" >/dev/null 2>&1 || true
+fi
+exit 0
