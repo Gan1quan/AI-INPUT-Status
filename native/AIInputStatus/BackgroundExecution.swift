@@ -9,6 +9,13 @@ final class AIInputStatusAppDelegate: NSObject, UIApplicationDelegate {
         return true
     }
 
+    func application(_ application: UIApplication, performFetchWithCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
+        Task {
+            let refreshed = await StatusStore.performBackgroundRefresh()
+            completionHandler(refreshed ? .newData : .failed)
+        }
+    }
+
     func applicationDidEnterBackground(_ application: UIApplication) {
         beginBackgroundExecution(application)
     }
