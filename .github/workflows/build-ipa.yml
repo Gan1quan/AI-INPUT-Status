@@ -55,18 +55,18 @@ jobs:
           /usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP_PATH/Info.plist"
           VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_PATH/Info.plist")
           BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP_PATH/Info.plist")
-          test "$VERSION" = "3.3.1"
-          test "$BUILD" = "8"
+          test "$VERSION" = "3.3.2"
+          test "$BUILD" = "9"
           echo "Verified native IPA version $VERSION ($BUILD)"
-          rm -rf Payload AI-INPUT-Status-v3.3.1.ipa
+          rm -rf Payload AI-INPUT-Status-v3.3.2.ipa
           mkdir Payload
           cp -R "$APP_PATH" Payload/
-          /usr/bin/zip -qry AI-INPUT-Status-v3.3.1.ipa Payload
-          unzip -l AI-INPUT-Status-v3.3.1.ipa
-          unzip -p AI-INPUT-Status-v3.3.1.ipa Payload/AIInputStatus.app/Info.plist | plutil -p -
+          /usr/bin/zip -qry AI-INPUT-Status-v3.3.2.ipa Payload
+          unzip -l AI-INPUT-Status-v3.3.2.ipa
+          unzip -p AI-INPUT-Status-v3.3.2.ipa Payload/AIInputStatus.app/Info.plist | plutil -p -
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: AI-INPUT-Status-v3.3.1
-          path: native/AI-INPUT-Status-v3.3.1.ipa
+          name: AI-INPUT-Status-v3.3.2
+          path: native/AI-INPUT-Status-v3.3.2.ipa
           if-no-files-found: error

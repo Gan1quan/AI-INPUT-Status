@@ -56,9 +56,6 @@ struct RefreshDiagnostics: Codable {
     var totalAttempts: Int = 0
     var successfulAttempts: Int = 0
     var failedAttempts: Int = 0
-    var backgroundFetches: Int = 0
-    var backgroundSuccesses: Int = 0
-    var backgroundFailures: Int = 0
     var recentIntervals: [TimeInterval] = []
     var lastExecutionSource: String = "启动"
 
@@ -68,7 +65,6 @@ struct RefreshDiagnostics: Codable {
     enum CodingKeys: String, CodingKey {
         case lastAttemptAt, lastSuccessAt, lastFailureAt, lastError
         case totalAttempts, successfulAttempts, failedAttempts
-        case backgroundFetches, backgroundSuccesses, backgroundFailures
         case recentIntervals, lastExecutionSource
     }
 
@@ -83,9 +79,6 @@ struct RefreshDiagnostics: Codable {
         totalAttempts = try container.decodeIfPresent(Int.self, forKey: .totalAttempts) ?? 0
         successfulAttempts = try container.decodeIfPresent(Int.self, forKey: .successfulAttempts) ?? 0
         failedAttempts = try container.decodeIfPresent(Int.self, forKey: .failedAttempts) ?? 0
-        backgroundFetches = try container.decodeIfPresent(Int.self, forKey: .backgroundFetches) ?? 0
-        backgroundSuccesses = try container.decodeIfPresent(Int.self, forKey: .backgroundSuccesses) ?? 0
-        backgroundFailures = try container.decodeIfPresent(Int.self, forKey: .backgroundFailures) ?? 0
         recentIntervals = try container.decodeIfPresent([TimeInterval].self, forKey: .recentIntervals) ?? []
         lastExecutionSource = try container.decodeIfPresent(String.self, forKey: .lastExecutionSource) ?? "启动"
     }
@@ -160,11 +153,12 @@ final class StatusStore: ObservableObject {
         lastRefreshError = cached?.lastError
         Task { await loadPluginStatus() }
         guard autoRefresh else { return }
-        refreshTask = Task { [weak self] in
+            refreshTask = Task { [weak self] in
             await self?.refresh()
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 30_000_000_000)
                 guard !Task.isCancelled else { return }
+                guard UIApplication.shared.applicationState == .active else { continue }
                 await self?.refresh()
             }
         }
@@ -222,9 +216,7 @@ final class StatusStore: ObservableObject {
         activeRequest = true
         isRefreshing = true
         let attemptAt = Date()
-        let isBackground = source.contains("后台")
         diagnostics.totalAttempts += 1
-        if isBackground { diagnostics.backgroundFetches += 1 }
         if let previous = diagnostics.lastAttemptAt {
             let interval = max(0, attemptAt.timeIntervalSince(previous))
             diagnostics.recentIntervals = Array((diagnostics.recentIntervals + [interval]).suffix(48))
@@ -254,7 +246,6 @@ final class StatusStore: ObservableObject {
             diagnostics.lastSuccessAt = fetchedAt
             diagnostics.lastError = nil
             diagnostics.successfulAttempts += 1
-            if isBackground { diagnostics.backgroundSuccesses += 1 }
             saveCache(value)
             saveDiagnostics()
             return true
@@ -265,7 +256,6 @@ final class StatusStore: ObservableObject {
             diagnostics.lastFailureAt = Date()
             diagnostics.lastError = message
             diagnostics.failedAttempts += 1
-            if isBackground { diagnostics.backgroundFailures += 1 }
             if let old = cached {
                 let failed = CachedStatus(snapshot: old.snapshot, fetchedAt: old.fetchedAt, lastError: message)
                 cached = failed
@@ -327,11 +317,6 @@ final class StatusStore: ObservableObject {
             return entries[index + 1].timestamp
         }
         return entries.first?.timestamp
-    }
-
-    static func performBackgroundRefresh(source: String = "系统后台 fetch") async -> Bool {
-        let store = await MainActor.run { StatusStore(autoRefresh: false) }
-        return await store.refresh(source: source)
     }
 
     private func decodeSnapshot(_ data: Data) throws -> Snapshot {
@@ -682,12 +667,12 @@ struct SettingsView: View {
                     LabeledContent("本次启动刷新", value: "\(store.refreshCount) 次")
                 }
                 Section("后台插件") {
-                    LabeledContent("插件状态", value: store.pluginStatus == nil ? "未连接" : "运行中")
+                    LabeledContent("插件状态", value: pluginStatusLabel)
                     if let plugin = store.pluginStatus {
-                        LabeledContent("插件请求次数", value: "\(plugin.attempts) 次")
+                        LabeledContent("累计请求次数", value: "\(plugin.attempts) 次")
                         LabeledContent("插件成功 / 失败", value: "\(plugin.successes) / \(plugin.failures)")
-                        LabeledContent("插件最近请求", value: pluginDate(plugin.lastAttempt))
-                        LabeledContent("插件最近间隔", value: pluginInterval(plugin.lastInterval))
+                        LabeledContent("最近成功", value: pluginDate(plugin.lastSuccess))
+                        LabeledContent("最近间隔", value: pluginInterval(plugin.lastInterval))
                         if let error = plugin.lastError { Text(error).font(.footnote).foregroundColor(.orange) }
                     } else {
                         Text("未检测到 RootHide 后台插件，请先安装 DEB 并重启插件服务。")
@@ -695,25 +680,31 @@ struct SettingsView: View {
                     }
                 }
                 Section("实际请求记录") {
-                    LabeledContent("最后一次尝试", value: diagnosticDate(store.diagnostics.lastAttemptAt))
-                    LabeledContent("最后一次成功", value: diagnosticDate(store.diagnostics.lastSuccessAt))
-                    LabeledContent("最后一次失败", value: diagnosticDate(store.diagnostics.lastFailureAt))
-                    LabeledContent("最近请求间隔", value: intervalText(store.diagnostics.lastInterval))
-                    LabeledContent("最长请求间隔", value: intervalText(store.diagnostics.maxInterval))
+                    LabeledContent("本次打开请求", value: "\(store.refreshCount) 次")
                     LabeledContent("最近执行来源", value: store.diagnostics.lastExecutionSource)
-                    LabeledContent("累计成功 / 失败", value: "\(store.diagnostics.successfulAttempts) / \(store.diagnostics.failedAttempts)")
+                    LabeledContent("最后一次成功", value: diagnosticDate(store.diagnostics.lastSuccessAt))
+                    LabeledContent("最近请求间隔", value: intervalText(store.diagnostics.lastInterval))
                     if let error = store.diagnostics.lastError {
                         Text(error).font(.footnote).foregroundColor(.orange)
                     }
                 }
                 Section("关于") {
                     Link("打开官方状态页", destination: URL(string: "https://status.input.im/")!)
-                    Text("AI INPUT Status 3.3.1").foregroundColor(.secondary)
+                    Text("AI INPUT Status 3.3.2").foregroundColor(.secondary)
                 }
             }
             .navigationTitle("设置")
             .navigationBarTitleDisplayMode(.inline)
         }
+    }
+
+    private var pluginStatusLabel: String {
+        guard let plugin = store.pluginStatus else { return "未连接" }
+        guard plugin.lastSuccess > 0 else { return plugin.lastError == nil ? "启动中" : "后台异常" }
+        let age = Date().timeIntervalSince1970 - plugin.lastSuccess
+        if age <= 300 { return "运行中" }
+        if age <= 900 { return "数据已过期" }
+        return "后台异常"
     }
 
     private func pluginDate(_ value: TimeInterval) -> String {

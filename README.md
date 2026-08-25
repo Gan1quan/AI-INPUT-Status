@@ -11,12 +11,12 @@ AI INPUT public status app and RootHide background poller for iOS 16.1.
 
 ## Build IPA
 
-GitHub Actions → `Build IPA` → artifact `AI-INPUT-Status-v3.3.0`.
+GitHub Actions → `Build IPA` → artifact `AI-INPUT-Status-v3.3.2`.
 The IPA is unsigned and needs TrollStore or another appropriate signer.
 
 ## Build RootHide DEB
 
-GitHub Actions → `Build RootHide Background DEB` → artifact `AI-INPUT-Status-Background-v1.1.0-arm64e`.
+GitHub Actions → `Build RootHide Background DEB` → artifact `AI-INPUT-Status-Background-v1.1.1-arm64e`.
 Use the RootHide/roothide Theos package scheme. Install the DEB, respring/restart SpringBoard, then open the IPA and check Settings → Background Plugin.
 
 ## Diagnostics on device
