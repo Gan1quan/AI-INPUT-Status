@@ -91,6 +91,24 @@ struct RefreshDiagnostics: Codable {
     }
 }
 
+struct PluginStatus: Codable {
+    let version: Int
+    let daemon: String
+    let attempts: Int
+    let successes: Int
+    let failures: Int
+    let lastAttempt: TimeInterval
+    let lastSuccess: TimeInterval
+    let lastFailure: TimeInterval
+    let lastInterval: TimeInterval
+    let lastError: String?
+    enum CodingKeys: String, CodingKey {
+        case version, daemon, attempts, successes, failures
+        case lastAttempt = "last_attempt", lastSuccess = "last_success", lastFailure = "last_failure"
+        case lastInterval = "last_interval", lastError = "last_error"
+    }
+}
+
 struct StatusRequestError: LocalizedError {
     let message: String
     var errorDescription: String? { message }
@@ -121,8 +139,10 @@ final class StatusStore: ObservableObject {
     @Published private(set) var isRefreshing = false
     @Published private(set) var refreshCount = 0
     @Published private(set) var diagnostics: RefreshDiagnostics
-    @Published private(set) var lastRefreshError: String?
+    @Published private(set) var pluginStatus: PluginStatus?
+    @Published private(set) var pluginCheckedAt: Date?
     private let endpoint = URL(string: "https://status.input.im/api/status")!
+    private let pluginURL = URL(string: "http://127.0.0.1:17891/")!
     private let cacheKey = "ai-input-status-cache.v3"
     private let legacyCacheKey = "ai-input-status-cache.v2"
     private let observationKey = "ai-input-status-observations.v1"
@@ -135,6 +155,7 @@ final class StatusStore: ObservableObject {
         loadCache()
         loadObservations()
         lastRefreshError = cached?.lastError
+        Task { await loadPluginStatus() }
         guard autoRefresh else { return }
         refreshTask = Task { [weak self] in
             await self?.refresh()
@@ -147,6 +168,19 @@ final class StatusStore: ObservableObject {
     }
 
     deinit { refreshTask?.cancel() }
+
+    func loadPluginStatus() async {
+        do {
+            var request = URLRequest(url: pluginURL)
+            request.timeoutInterval = 1.5
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
+            pluginStatus = try JSONDecoder().decode(PluginStatus.self, from: data)
+        } catch {
+            pluginStatus = nil
+        }
+        pluginCheckedAt = Date()
+    }
 
     func refresh(source: String = "前台") async -> Bool {
         while activeRequest {
@@ -220,7 +254,7 @@ final class StatusStore: ObservableObject {
     func refresh() async { _ = await refresh(source: "前台") }
 
     func handleScene(_ phase: ScenePhase) {
-        if phase == .active { Task { await refresh(source: "返回前台") } }
+        if phase == .active { Task { await store.loadPluginStatus(); await store.refresh(source: "返回前台") } }
     }
 
     private func readableError(_ error: Error) -> String {
@@ -620,6 +654,19 @@ struct SettingsView: View {
                     LabeledContent("后台刷新", value: "系统不保证")
                     LabeledContent("本次启动刷新", value: "\(store.refreshCount) 次")
                 }
+                Section("后台插件") {
+                    LabeledContent("插件状态", value: store.pluginStatus == nil ? "未连接" : "运行中")
+                    if let plugin = store.pluginStatus {
+                        LabeledContent("插件请求次数", value: "\(plugin.attempts) 次")
+                        LabeledContent("插件成功 / 失败", value: "\(plugin.successes) / \(plugin.failures)")
+                        LabeledContent("插件最近请求", value: pluginDate(plugin.lastAttempt))
+                        LabeledContent("插件最近间隔", value: pluginInterval(plugin.lastInterval))
+                        if let error = plugin.lastError { Text(error).font(.footnote).foregroundColor(.orange) }
+                    } else {
+                        Text("未检测到 RootHide 后台插件，请先安装 DEB 并重启插件服务。")
+                            .font(.footnote).foregroundColor(.secondary)
+                    }
+                }
                 Section("后台实际记录") {
                     LabeledContent("系统 fetch 调用", value: "\(store.diagnostics.backgroundFetches) 次")
                     LabeledContent("后台成功 / 失败", value: "\(store.diagnostics.backgroundSuccesses) / \(store.diagnostics.backgroundFailures)")
@@ -647,6 +694,16 @@ struct SettingsView: View {
             .navigationTitle("设置")
             .navigationBarTitleDisplayMode(.inline)
         }
+    }
+
+    private func pluginDate(_ value: TimeInterval) -> String {
+        guard value > 0 else { return "--" }
+        return Date(timeIntervalSince1970: value).formatted(date: .omitted, time: .standard)
+    }
+
+    private func pluginInterval(_ value: TimeInterval) -> String {
+        guard value > 0 else { return "--" }
+        return String(format: "%.1f 秒", value)
     }
 
     private func diagnosticDate(_ date: Date?) -> String {
