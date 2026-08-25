@@ -1,0 +1,5 @@
+#!/bin/sh
+set +e
+PLIST="/var/jb/Library/LaunchDaemons/com.gan1quan.aiinputstatus.background.plist"
+launchctl bootout system "$PLIST" >/dev/null 2>&1 || launchctl unload "$PLIST" >/dev/null 2>&1 || true
+exit 0
