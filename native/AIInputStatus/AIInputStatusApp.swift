@@ -139,6 +139,7 @@ final class StatusStore: ObservableObject {
     @Published private(set) var isRefreshing = false
     @Published private(set) var refreshCount = 0
     @Published private(set) var diagnostics: RefreshDiagnostics
+    @Published private(set) var lastRefreshError: String?
     @Published private(set) var pluginStatus: PluginStatus?
     @Published private(set) var pluginCheckedAt: Date?
     private let endpoint = URL(string: "https://status.input.im/api/status")!
@@ -254,7 +255,9 @@ final class StatusStore: ObservableObject {
     func refresh() async { _ = await refresh(source: "前台") }
 
     func handleScene(_ phase: ScenePhase) {
-        if phase == .active { Task { await store.loadPluginStatus(); await store.refresh(source: "返回前台") } }
+        if phase == .active {
+            Task { await loadPluginStatus(); await refresh(source: "返回前台") }
+        }
     }
 
     private func readableError(_ error: Error) -> String {
