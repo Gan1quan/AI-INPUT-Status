@@ -15,13 +15,13 @@ jobs:
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode_15.4.app
       - name: Generate project
-        working-directory: native
+        working-directory: .
         run: |
           xcodegen generate
           sed -i '' 's/objectVersion = 77;/objectVersion = 60;/' AIInputStatus.xcodeproj/project.pbxproj
           sed -i '' 's/Xcode 16.0/Xcode 15.0/' AIInputStatus.xcodeproj/project.pbxproj
       - name: Build unsigned app
-        working-directory: native
+        working-directory: .
         run: |
           set -o pipefail
           xcodebuild \
@@ -38,7 +38,7 @@ jobs:
             clean build 2>&1 | tee xcodebuild.log
       - name: Publish build diagnostics
         if: failure()
-        working-directory: native
+        working-directory: .
         run: |
           if [ -f xcodebuild.log ]; then
             grep -E '(^|[[:space:]])(error|fatal error):' xcodebuild.log | head -40 | while IFS= read -r line; do
@@ -46,13 +46,18 @@ jobs:
             done
           fi
       - name: Package IPA
-        working-directory: native
+        working-directory: .
         run: |
           APP_PATH="build/AIInputStatus.app"
           test -d "$APP_PATH"
           test -f "$APP_PATH/AIInputStatus"
           /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP_PATH/Info.plist"
           /usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP_PATH/Info.plist"
+          VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_PATH/Info.plist")
+          BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP_PATH/Info.plist")
+          test "$VERSION" = "3.2.0"
+          test "$BUILD" = "5"
+          echo "Verified native IPA version $VERSION ($BUILD)"
           rm -rf Payload AI-INPUT-Status-v3.2.0.ipa
           mkdir Payload
           cp -R "$APP_PATH" Payload/
@@ -63,5 +68,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: AI-INPUT-Status-v3.2.0
-          path: native/AI-INPUT-Status-v3.2.0.ipa
+          path: AI-INPUT-Status-v3.2.0.ipa
           if-no-files-found: error
