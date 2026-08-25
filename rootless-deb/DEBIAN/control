@@ -1,0 +1,8 @@
+Package: com.gan1quan.aiinputstatus.background
+Name: AI INPUT Status Background
+Version: 1.0.0
+Architecture: iphoneos-arm64
+Description: RootHide rootless background status poller for AI INPUT Status
+Maintainer: AI INPUT Status
+Section: Tweaks
+Priority: optional
