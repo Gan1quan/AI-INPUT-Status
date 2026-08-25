@@ -48,7 +48,7 @@ jobs:
       - name: Package IPA
         working-directory: native
         run: |
-          APP_PATH="native/build/AIInputStatus.app"
+          APP_PATH="build/AIInputStatus.app"
           test -d "$APP_PATH"
           test -f "$APP_PATH/AIInputStatus"
           /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP_PATH/Info.plist"
@@ -58,12 +58,12 @@ jobs:
           test "$VERSION" = "3.2.0"
           test "$BUILD" = "5"
           echo "Verified native IPA version $VERSION ($BUILD)"
-          rm -rf native/Payload native/AI-INPUT-Status-v3.2.0.ipa
-          mkdir native/Payload
-          cp -R "$APP_PATH" native/Payload/
-          /usr/bin/zip -qry native/AI-INPUT-Status-v3.2.0.ipa native/Payload
-          unzip -l native/AI-INPUT-Status-v3.2.0.ipa
-          unzip -p native/AI-INPUT-Status-v3.2.0.ipa native/Payload/AIInputStatus.app/Info.plist | plutil -p -
+          rm -rf Payload AI-INPUT-Status-v3.2.0.ipa
+          mkdir Payload
+          cp -R "$APP_PATH" Payload/
+          /usr/bin/zip -qry AI-INPUT-Status-v3.2.0.ipa Payload
+          unzip -l AI-INPUT-Status-v3.2.0.ipa
+          unzip -p AI-INPUT-Status-v3.2.0.ipa Payload/AIInputStatus.app/Info.plist | plutil -p -
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
