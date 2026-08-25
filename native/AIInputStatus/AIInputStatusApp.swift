@@ -56,11 +56,39 @@ struct RefreshDiagnostics: Codable {
     var totalAttempts: Int = 0
     var successfulAttempts: Int = 0
     var failedAttempts: Int = 0
+    var backgroundFetches: Int = 0
+    var backgroundSuccesses: Int = 0
+    var backgroundFailures: Int = 0
     var recentIntervals: [TimeInterval] = []
     var lastExecutionSource: String = "启动"
 
     var lastInterval: TimeInterval? { recentIntervals.last }
     var maxInterval: TimeInterval? { recentIntervals.max() }
+
+    enum CodingKeys: String, CodingKey {
+        case lastAttemptAt, lastSuccessAt, lastFailureAt, lastError
+        case totalAttempts, successfulAttempts, failedAttempts
+        case backgroundFetches, backgroundSuccesses, backgroundFailures
+        case recentIntervals, lastExecutionSource
+    }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        lastAttemptAt = try container.decodeIfPresent(Date.self, forKey: .lastAttemptAt)
+        lastSuccessAt = try container.decodeIfPresent(Date.self, forKey: .lastSuccessAt)
+        lastFailureAt = try container.decodeIfPresent(Date.self, forKey: .lastFailureAt)
+        lastError = try container.decodeIfPresent(String.self, forKey: .lastError)
+        totalAttempts = try container.decodeIfPresent(Int.self, forKey: .totalAttempts) ?? 0
+        successfulAttempts = try container.decodeIfPresent(Int.self, forKey: .successfulAttempts) ?? 0
+        failedAttempts = try container.decodeIfPresent(Int.self, forKey: .failedAttempts) ?? 0
+        backgroundFetches = try container.decodeIfPresent(Int.self, forKey: .backgroundFetches) ?? 0
+        backgroundSuccesses = try container.decodeIfPresent(Int.self, forKey: .backgroundSuccesses) ?? 0
+        backgroundFailures = try container.decodeIfPresent(Int.self, forKey: .backgroundFailures) ?? 0
+        recentIntervals = try container.decodeIfPresent([TimeInterval].self, forKey: .recentIntervals) ?? []
+        lastExecutionSource = try container.decodeIfPresent(String.self, forKey: .lastExecutionSource) ?? "启动"
+    }
 }
 
 struct StatusRequestError: LocalizedError {
@@ -100,6 +128,7 @@ final class StatusStore: ObservableObject {
     private let observationKey = "ai-input-status-observations.v1"
     private let diagnosticsKey = "ai-input-status-diagnostics.v1"
     private var refreshTask: Task<Void, Never>?
+    private var activeRequest = false
 
     init(autoRefresh: Bool = true) {
         diagnostics = (UserDefaults.standard.data(forKey: diagnosticsKey).flatMap { try? JSONDecoder().decode(RefreshDiagnostics.self, from: $0) }) ?? RefreshDiagnostics()
@@ -120,10 +149,17 @@ final class StatusStore: ObservableObject {
     deinit { refreshTask?.cancel() }
 
     func refresh(source: String = "前台") async -> Bool {
-        guard !isRefreshing else { return false }
+        while activeRequest {
+            if Task.isCancelled { return false }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        if Task.isCancelled { return false }
+        activeRequest = true
         isRefreshing = true
         let attemptAt = Date()
+        let isBackground = source.contains("后台")
         diagnostics.totalAttempts += 1
+        if isBackground { diagnostics.backgroundFetches += 1 }
         if let previous = diagnostics.lastAttemptAt {
             let interval = max(0, attemptAt.timeIntervalSince(previous))
             diagnostics.recentIntervals = Array((diagnostics.recentIntervals + [interval]).suffix(48))
@@ -131,7 +167,10 @@ final class StatusStore: ObservableObject {
         diagnostics.lastAttemptAt = attemptAt
         diagnostics.lastExecutionSource = source
         saveDiagnostics()
-        defer { isRefreshing = false }
+        defer {
+            activeRequest = false
+            isRefreshing = false
+        }
         do {
             var request = URLRequest(url: endpoint)
             request.timeoutInterval = 12
@@ -154,15 +193,20 @@ final class StatusStore: ObservableObject {
             diagnostics.lastSuccessAt = fetchedAt
             diagnostics.lastError = nil
             diagnostics.successfulAttempts += 1
+            if isBackground { diagnostics.backgroundSuccesses += 1 }
             saveCache(value)
             saveDiagnostics()
             return true
         } catch {
+            if Task.isCancelled || (error as? URLError)?.code == .cancelled {
+                return false
+            }
             let message = readableError(error)
             lastRefreshError = message
             diagnostics.lastFailureAt = Date()
             diagnostics.lastError = message
             diagnostics.failedAttempts += 1
+            if isBackground { diagnostics.backgroundFailures += 1 }
             if let old = cached {
                 let failed = CachedStatus(snapshot: old.snapshot, fetchedAt: old.fetchedAt, lastError: message)
                 cached = failed
@@ -224,9 +268,9 @@ final class StatusStore: ObservableObject {
         return entries.first?.timestamp
     }
 
-    static func performBackgroundRefresh() async -> Bool {
+    static func performBackgroundRefresh(source: String = "系统后台 fetch") async -> Bool {
         let store = await MainActor.run { StatusStore(autoRefresh: false) }
-        return await store.refresh(source: "系统后台 fetch")
+        return await store.refresh(source: source)
     }
 
     private func decodeSnapshot(_ data: Data) throws -> Snapshot {
@@ -300,7 +344,7 @@ struct ContentView: View {
             }
             .background(TerminalPalette.background.ignoresSafeArea())
             .navigationBarHidden(true)
-            .refreshable { await store.refresh() }
+            .refreshable { await store.refresh(source: "下拉刷新") }
             .sheet(isPresented: $showingSettings) { SettingsView().environmentObject(store) }
         }
         .navigationViewStyle(.stack)
@@ -335,7 +379,7 @@ struct ContentView: View {
                 .font(TerminalPalette.brand)
                 .foregroundColor(TerminalPalette.green)
             Spacer()
-            Text("api \(apiLabel)")
+            Text(store.isRefreshing ? "syncing" : "api \(apiLabel)")
                 .font(TerminalPalette.meta)
                 .foregroundColor(apiColor)
             Button { Task { await store.refresh(source: "手动刷新") } } label: {
@@ -361,19 +405,19 @@ struct ContentView: View {
             }
             Rectangle().fill(TerminalPalette.rule).frame(height: 1).padding(.top, 2)
             HStack(alignment: .firstTextBaseline) {
-                Text("data \(clock(cached.snapshot.generatedAt))")
+                Text(store.isRefreshing ? "正在请求最新状态" : "数据 \(clock(cached.snapshot.generatedAt))")
                 Spacer()
-                Text("run \(clock(cached.fetchedAt)) · 前台 30s")
+                Text("成功 \(clock(cached.fetchedAt)) · \(cached.ageText)")
             }
             .font(TerminalPalette.footer)
             .foregroundColor(cached.lastError == nil ? TerminalPalette.dim : TerminalPalette.amber)
             if let error = cached.lastError {
-                Text("数据过期 · 上次成功于 \(clock(cached.fetchedAt)) · \(cached.ageText)")
-                    .font(TerminalPalette.footer)
-                    .foregroundColor(TerminalPalette.amber)
-                Text("请求失败：\(error) · 正在显示缓存")
-                    .font(TerminalPalette.footer)
-                    .foregroundColor(TerminalPalette.amber)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("最近请求未完成，以下为缓存状态")
+                    Text(error)
+                }
+                .font(TerminalPalette.footer)
+                .foregroundColor(TerminalPalette.amber)
             }
         }
     }
@@ -576,6 +620,13 @@ struct SettingsView: View {
                     LabeledContent("后台刷新", value: "系统不保证")
                     LabeledContent("本次启动刷新", value: "\(store.refreshCount) 次")
                 }
+                Section("后台实际记录") {
+                    LabeledContent("系统 fetch 调用", value: "\(store.diagnostics.backgroundFetches) 次")
+                    LabeledContent("后台成功 / 失败", value: "\(store.diagnostics.backgroundSuccesses) / \(store.diagnostics.backgroundFailures)")
+                    Text("后台由 iOS 或后台插件调度；这里仅记录实际回调与请求结果，不能代表固定 30 秒执行。")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                }
                 Section("实际请求记录") {
                     LabeledContent("最后一次尝试", value: diagnosticDate(store.diagnostics.lastAttemptAt))
                     LabeledContent("最后一次成功", value: diagnosticDate(store.diagnostics.lastSuccessAt))
@@ -590,7 +641,7 @@ struct SettingsView: View {
                 }
                 Section("关于") {
                     Link("打开官方状态页", destination: URL(string: "https://status.input.im/")!)
-                    Text("AI INPUT Status 3.2.0").foregroundColor(.secondary)
+                    Text("AI INPUT Status 3.2.1").foregroundColor(.secondary)
                 }
             }
             .navigationTitle("设置")
