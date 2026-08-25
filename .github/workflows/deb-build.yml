@@ -37,6 +37,11 @@ jobs:
             -Werror -Wall -Wextra \
             -o stage/usr/libexec/aiinputstatusd rootless-deb/aiinputstatusd.m
           chmod 755 stage/usr/libexec/aiinputstatusd
+          # A clang-produced executable is not launchable on iOS until it has
+          # an ad-hoc code signature. Theos signs the tweak automatically;
+          # sign the standalone daemon explicitly before packaging it.
+          ldid -Sroothide.entitlements stage/usr/libexec/aiinputstatusd
+          ldid -h stage/usr/libexec/aiinputstatusd
           file stage/usr/libexec/aiinputstatusd | grep -q arm64e
           cp layout/Library/LaunchDaemons/com.gan1quan.aiinputstatus.background.plist stage/Library/LaunchDaemons/
       - name: Merge daemon into tweak package
