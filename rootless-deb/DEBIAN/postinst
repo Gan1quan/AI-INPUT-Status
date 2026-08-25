@@ -1,12 +1,19 @@
 #!/bin/sh
-set -e
+
+# Maintainer scripts run synchronously under dpkg. Do not invoke the daemon
+# directly here: it is a long-running process managed by launchd.
+set +e
+
 JBROOT="/var/jb"
-DAEMON="$JBROOT/usr/libexec/aiinputstatusd"
 PLIST="$JBROOT/Library/LaunchDaemons/com.gan1quan.aiinputstatus.background.plist"
-if [ -x "$DAEMON" ]; then
-  "$DAEMON" --install >/dev/null 2>&1 || true
-fi
-if [ -f "$PLIST" ]; then
-  launchctl bootstrap system "$PLIST" >/dev/null 2>&1 || launchctl load "$PLIST" >/dev/null 2>&1 || true
-fi
+
+case "$1" in
+  configure|abort-upgrade|abort-remove|abort-deconfigure)
+    if [ -f "$PLIST" ] && command -v launchctl >/dev/null 2>&1; then
+      launchctl bootout system "$PLIST" >/dev/null 2>&1
+      launchctl bootstrap system "$PLIST" >/dev/null 2>&1 || launchctl load "$PLIST" >/dev/null 2>&1
+    fi
+    ;;
+esac
+
 exit 0
