@@ -16,10 +16,14 @@ jobs:
         run: sudo xcode-select -s /Applications/Xcode_15.4.app
       - name: Generate project
         working-directory: native
-        run: xcodegen generate
+        run: |
+          xcodegen generate
+          sed -i '' 's/objectVersion = 77;/objectVersion = 60;/' AIInputStatus.xcodeproj/project.pbxproj
+          sed -i '' 's/Xcode 16.0/Xcode 15.0/' AIInputStatus.xcodeproj/project.pbxproj
       - name: Build unsigned app
         working-directory: native
         run: |
+          set -o pipefail
           xcodebuild \
             -project AIInputStatus.xcodeproj \
             -scheme AIInputStatus \
@@ -31,18 +35,33 @@ jobs:
             CODE_SIGN_IDENTITY='' \
             DEVELOPMENT_TEAM='' \
             CONFIGURATION_BUILD_DIR="$PWD/build" \
-            clean build
+            clean build 2>&1 | tee xcodebuild.log
+      - name: Publish build diagnostics
+        if: failure()
+        working-directory: native
+        run: |
+          if [ -f xcodebuild.log ]; then
+            grep -E '(^|[[:space:]])(error|fatal error):' xcodebuild.log | head -40 | while IFS= read -r line; do
+              echo "::error::$line"
+            done
+          fi
       - name: Package IPA
         working-directory: native
         run: |
-          rm -rf Payload AI-INPUT-Status-unsigned.ipa
+          APP_PATH="build/AIInputStatus.app"
+          test -d "$APP_PATH"
+          test -f "$APP_PATH/AIInputStatus"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP_PATH/Info.plist"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP_PATH/Info.plist"
+          rm -rf Payload AI-INPUT-Status-v3.2.0.ipa
           mkdir Payload
-          cp -R build/AI\\ INPUT\\ Status.app Payload/
-          /usr/bin/zip -qry AI-INPUT-Status-unsigned.ipa Payload
-          unzip -l AI-INPUT-Status-unsigned.ipa
+          cp -R "$APP_PATH" Payload/
+          /usr/bin/zip -qry AI-INPUT-Status-v3.2.0.ipa Payload
+          unzip -l AI-INPUT-Status-v3.2.0.ipa
+          unzip -p AI-INPUT-Status-v3.2.0.ipa Payload/AIInputStatus.app/Info.plist | plutil -p -
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: AI-INPUT-Status-unsigned
-          path: native/AI-INPUT-Status-unsigned.ipa
+          name: AI-INPUT-Status-v3.2.0
+          path: native/AI-INPUT-Status-v3.2.0.ipa
           if-no-files-found: error
