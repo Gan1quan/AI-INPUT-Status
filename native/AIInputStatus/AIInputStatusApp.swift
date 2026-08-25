@@ -48,6 +48,26 @@ struct CachedStatus: Codable {
     var isStale: Bool { age > 240 }
 }
 
+struct RefreshDiagnostics: Codable {
+    var lastAttemptAt: Date?
+    var lastSuccessAt: Date?
+    var lastFailureAt: Date?
+    var lastError: String?
+    var totalAttempts: Int = 0
+    var successfulAttempts: Int = 0
+    var failedAttempts: Int = 0
+    var recentIntervals: [TimeInterval] = []
+    var lastExecutionSource: String = "启动"
+
+    var lastInterval: TimeInterval? { recentIntervals.last }
+    var maxInterval: TimeInterval? { recentIntervals.max() }
+}
+
+struct StatusRequestError: LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
+}
+
 struct Observation: Codable, Identifiable, Hashable {
     let timestamp: Date
     let model: String
@@ -72,15 +92,20 @@ final class StatusStore: ObservableObject {
     @Published private(set) var observations: [Observation] = []
     @Published private(set) var isRefreshing = false
     @Published private(set) var refreshCount = 0
+    @Published private(set) var diagnostics: RefreshDiagnostics
+    @Published private(set) var lastRefreshError: String?
     private let endpoint = URL(string: "https://status.input.im/api/status")!
     private let cacheKey = "ai-input-status-cache.v3"
     private let legacyCacheKey = "ai-input-status-cache.v2"
     private let observationKey = "ai-input-status-observations.v1"
+    private let diagnosticsKey = "ai-input-status-diagnostics.v1"
     private var refreshTask: Task<Void, Never>?
 
     init(autoRefresh: Bool = true) {
+        diagnostics = (UserDefaults.standard.data(forKey: diagnosticsKey).flatMap { try? JSONDecoder().decode(RefreshDiagnostics.self, from: $0) }) ?? RefreshDiagnostics()
         loadCache()
         loadObservations()
+        lastRefreshError = cached?.lastError
         guard autoRefresh else { return }
         refreshTask = Task { [weak self] in
             await self?.refresh()
@@ -94,32 +119,83 @@ final class StatusStore: ObservableObject {
 
     deinit { refreshTask?.cancel() }
 
-    func refresh() async {
-        guard !isRefreshing else { return }
+    func refresh(source: String = "前台") async -> Bool {
+        guard !isRefreshing else { return false }
         isRefreshing = true
+        let attemptAt = Date()
+        diagnostics.totalAttempts += 1
+        if let previous = diagnostics.lastAttemptAt {
+            let interval = max(0, attemptAt.timeIntervalSince(previous))
+            diagnostics.recentIntervals = Array((diagnostics.recentIntervals + [interval]).suffix(48))
+        }
+        diagnostics.lastAttemptAt = attemptAt
+        diagnostics.lastExecutionSource = source
+        saveDiagnostics()
         defer { isRefreshing = false }
         do {
             var request = URLRequest(url: endpoint)
             request.timeoutInterval = 12
             request.cachePolicy = .reloadIgnoringLocalCacheData
             request.setValue("application/json", forHTTPHeaderField: "Accept")
+            request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
             let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-                throw URLError(.badServerResponse)
+            guard let http = response as? HTTPURLResponse else {
+                throw StatusRequestError(message: "未收到有效 HTTP 响应")
             }
-            let value = CachedStatus(snapshot: try decodeSnapshot(data), fetchedAt: Date(), lastError: nil)
+            guard (200..<300).contains(http.statusCode) else {
+                throw StatusRequestError(message: "HTTP \(http.statusCode)")
+            }
+            let fetchedAt = Date()
+            let value = CachedStatus(snapshot: try decodeSnapshot(data), fetchedAt: fetchedAt, lastError: nil)
             cached = value
-            recordObservations(for: value.snapshot, at: value.fetchedAt)
+            recordObservations(for: value.snapshot, at: fetchedAt)
             refreshCount += 1
+            lastRefreshError = nil
+            diagnostics.lastSuccessAt = fetchedAt
+            diagnostics.lastError = nil
+            diagnostics.successfulAttempts += 1
             saveCache(value)
+            saveDiagnostics()
+            return true
         } catch {
-            guard let old = cached else { return }
-            cached = CachedStatus(snapshot: old.snapshot, fetchedAt: old.fetchedAt, lastError: error.localizedDescription)
+            let message = readableError(error)
+            lastRefreshError = message
+            diagnostics.lastFailureAt = Date()
+            diagnostics.lastError = message
+            diagnostics.failedAttempts += 1
+            if let old = cached {
+                let failed = CachedStatus(snapshot: old.snapshot, fetchedAt: old.fetchedAt, lastError: message)
+                cached = failed
+                saveCache(failed)
+            }
+            saveDiagnostics()
+            return false
         }
     }
 
+    func refresh() async { _ = await refresh(source: "前台") }
+
     func handleScene(_ phase: ScenePhase) {
-        if phase == .active { Task { await refresh() } }
+        if phase == .active { Task { await refresh(source: "返回前台") } }
+    }
+
+    private func readableError(_ error: Error) -> String {
+        if let requestError = error as? StatusRequestError { return requestError.message }
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .timedOut: return "请求超时"
+            case .notConnectedToInternet: return "没有网络连接"
+            case .cannotFindHost, .cannotConnectToHost: return "无法连接状态服务"
+            case .cancelled: return "请求已取消"
+            default: return "网络错误（\(urlError.code.rawValue)）"
+            }
+        }
+        if error is DecodingError { return "状态数据格式错误" }
+        return error.localizedDescription
+    }
+
+    private func saveDiagnostics() {
+        if let data = try? JSONEncoder().encode(diagnostics) { UserDefaults.standard.set(data, forKey: diagnosticsKey) }
     }
 
     func statistics(for service: ServiceStatus) -> DailyStatistics {
@@ -148,9 +224,9 @@ final class StatusStore: ObservableObject {
         return entries.first?.timestamp
     }
 
-    static func performBackgroundRefresh() async {
+    static func performBackgroundRefresh() async -> Bool {
         let store = await MainActor.run { StatusStore(autoRefresh: false) }
-        await store.refresh()
+        return await store.refresh(source: "系统后台 fetch")
     }
 
     private func decodeSnapshot(_ data: Data) throws -> Snapshot {
@@ -181,7 +257,11 @@ final class StatusStore: ObservableObject {
             return Observation(timestamp: date, model: service.model, ok: last.ok, confirmationTime: last.timestamp)
         }
         let cutoff = Calendar.current.date(byAdding: .day, value: -8, to: date) ?? date
-        observations = (observations + newValues).filter { $0.timestamp >= cutoff }.sorted { $0.timestamp < $1.timestamp }
+        let existingKeys = Set(observations.map { "\($0.model)|\($0.confirmationTime.timeIntervalSince1970)|\($0.ok)" })
+        let additions = newValues.filter {
+            !existingKeys.contains("\($0.model)|\($0.confirmationTime.timeIntervalSince1970)|\($0.ok)")
+        }
+        observations = (observations + additions).filter { $0.timestamp >= cutoff }.sorted { $0.timestamp < $1.timestamp }
         guard let data = try? JSONEncoder().encode(observations) else { return }
         UserDefaults.standard.set(data, forKey: observationKey)
     }
@@ -205,8 +285,10 @@ struct ContentView: View {
                     Rectangle().fill(TerminalPalette.rule).frame(height: 1).padding(.vertical, 16)
                     if let cached = store.cached {
                         terminalBody(cached)
+                    } else if let error = store.lastRefreshError {
+                        refreshFailureView(error)
                     } else {
-                        Text("connecting to status.input.im ...")
+                        Text(store.isRefreshing ? "正在连接 status.input.im ..." : "等待首次请求 ...")
                             .font(TerminalPalette.body)
                             .foregroundColor(TerminalPalette.dim)
                             .padding(.top, 80)
@@ -225,6 +307,28 @@ struct ContentView: View {
         .onChange(of: scenePhase) { store.handleScene($0) }
     }
 
+    private func refreshFailureView(_ error: String) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("无法取得最新状态")
+                .font(TerminalPalette.model)
+                .foregroundColor(TerminalPalette.red)
+            Text(error)
+                .font(TerminalPalette.body)
+                .foregroundColor(TerminalPalette.dim)
+            Text("下拉或点击右上角重试")
+                .font(TerminalPalette.meta)
+                .foregroundColor(TerminalPalette.dim)
+            Button { Task { await store.refresh(source: "手动重试") } } label: {
+                Label("重新请求", systemImage: "arrow.clockwise")
+                    .font(TerminalPalette.body)
+                    .foregroundColor(TerminalPalette.green)
+            }
+            .buttonStyle(.plain)
+            .disabled(store.isRefreshing)
+        }
+        .padding(.top, 80)
+    }
+
     private var terminalHeader: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text("AI INPUT")
@@ -234,12 +338,13 @@ struct ContentView: View {
             Text("api \(apiLabel)")
                 .font(TerminalPalette.meta)
                 .foregroundColor(apiColor)
-            Button { Task { await store.refresh() } } label: {
+            Button { Task { await store.refresh(source: "手动刷新") } } label: {
                 Image(systemName: store.isRefreshing ? "arrow.triangle.2.circlepath" : "arrow.clockwise")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundColor(TerminalPalette.dim)
             }
             .buttonStyle(.plain)
+            .disabled(store.isRefreshing)
             Button { showingSettings = true } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 13, weight: .bold))
@@ -252,12 +357,7 @@ struct ContentView: View {
     private func terminalBody(_ cached: CachedStatus) -> some View {
         VStack(alignment: .leading, spacing: 22) {
             ForEach(cached.snapshot.services) { service in
-                TerminalService(
-                    service: service,
-                    cached: cached,
-                    statistics: store.statistics(for: service),
-                    stateStartedAt: store.stateStartedAt(for: service)
-                )
+                TerminalService(service: service, cached: cached, statistics: store.statistics(for: service), stateStartedAt: store.stateStartedAt(for: service))
             }
             Rectangle().fill(TerminalPalette.rule).frame(height: 1).padding(.top, 2)
             HStack(alignment: .firstTextBaseline) {
@@ -267,8 +367,11 @@ struct ContentView: View {
             }
             .font(TerminalPalette.footer)
             .foregroundColor(cached.lastError == nil ? TerminalPalette.dim : TerminalPalette.amber)
-            if cached.lastError != nil {
-                Text("最后一次请求失败 · 正在显示缓存状态")
+            if let error = cached.lastError {
+                Text("数据过期 · 上次成功于 \(clock(cached.fetchedAt)) · \(cached.ageText)")
+                    .font(TerminalPalette.footer)
+                    .foregroundColor(TerminalPalette.amber)
+                Text("请求失败：\(error) · 正在显示缓存")
                     .font(TerminalPalette.footer)
                     .foregroundColor(TerminalPalette.amber)
             }
@@ -285,8 +388,14 @@ struct ContentView: View {
         return cached.lastError == nil ? TerminalPalette.green : TerminalPalette.amber
     }
 
-    private func clock(_ date: Date) -> String {
-        date.formatted(date: .omitted, time: .shortened)
+    private func clock(_ date: Date) -> String { date.formatted(date: .omitted, time: .shortened) }
+}
+
+extension CachedStatus {
+    var ageText: String {
+        let seconds = max(0, Int(age))
+        if seconds < 60 { return "\(seconds) 秒前" }
+        return "\(seconds / 60) 分钟前"
     }
 }
 
@@ -458,22 +567,45 @@ struct TerminalHistory: View {
 
 struct SettingsView: View {
     @EnvironmentObject private var store: StatusStore
+
     var body: some View {
         NavigationView {
             Form {
                 Section("刷新") {
                     LabeledContent("前台刷新周期", value: "30 秒")
-                    LabeledContent("后台刷新", value: "系统调度")
+                    LabeledContent("后台刷新", value: "系统不保证")
                     LabeledContent("本次启动刷新", value: "\(store.refreshCount) 次")
+                }
+                Section("实际请求记录") {
+                    LabeledContent("最后一次尝试", value: diagnosticDate(store.diagnostics.lastAttemptAt))
+                    LabeledContent("最后一次成功", value: diagnosticDate(store.diagnostics.lastSuccessAt))
+                    LabeledContent("最后一次失败", value: diagnosticDate(store.diagnostics.lastFailureAt))
+                    LabeledContent("最近请求间隔", value: intervalText(store.diagnostics.lastInterval))
+                    LabeledContent("最长请求间隔", value: intervalText(store.diagnostics.maxInterval))
+                    LabeledContent("最近执行来源", value: store.diagnostics.lastExecutionSource)
+                    LabeledContent("累计成功 / 失败", value: "\(store.diagnostics.successfulAttempts) / \(store.diagnostics.failedAttempts)")
+                    if let error = store.diagnostics.lastError {
+                        Text(error).font(.footnote).foregroundColor(.orange)
+                    }
                 }
                 Section("关于") {
                     Link("打开官方状态页", destination: URL(string: "https://status.input.im/")!)
-                    Text("AI INPUT Status 3.1.0").foregroundColor(.secondary)
+                    Text("AI INPUT Status 3.2.0").foregroundColor(.secondary)
                 }
             }
             .navigationTitle("设置")
             .navigationBarTitleDisplayMode(.inline)
         }
+    }
+
+    private func diagnosticDate(_ date: Date?) -> String {
+        guard let date else { return "--" }
+        return date.formatted(date: .omitted, time: .standard)
+    }
+
+    private func intervalText(_ interval: TimeInterval?) -> String {
+        guard let interval else { return "--" }
+        return String(format: "%.1f 秒", interval)
     }
 }
 
