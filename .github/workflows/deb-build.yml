@@ -1,52 +1,83 @@
-name: Build RootHide DEB
+name: Build RootHide Background DEB
 on:
   workflow_dispatch:
   push:
     branches: ["main"]
-    paths: ["rootless-deb/**", ".github/workflows/deb-build.yml"]
+    paths:
+      - "Makefile"
+      - "control"
+      - "layout/**"
+      - "rootless-deb/**"
+      - ".github/workflows/deb-build.yml"
 
 jobs:
   build:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
-      - name: Build rootless arm64e daemon
+      - name: Install RootHide Theos
         run: |
-          mkdir -p rootless-deb/layout/var/jb/usr/libexec
+          git clone --depth=1 https://github.com/roothide/theos.git "$HOME/theos"
+          echo "THEOS=$HOME/theos" >> "$GITHUB_ENV"
+      - name: Build SpringBoard tweak
+        run: |
+          set -euxo pipefail
+          make clean package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide
+          test -n "$(find packages -name '*.deb' -print -quit)"
+      - name: Build arm64e daemon
+        run: |
+          set -euxo pipefail
+          mkdir -p stage/usr/libexec stage/Library/LaunchDaemons
           xcrun clang -target arm64e-apple-ios16.1 -isysroot "$(xcrun --sdk iphoneos --show-sdk-path)" \
-            -fobjc-arc -framework Foundation -o rootless-deb/layout/var/jb/usr/libexec/aiinputstatusd rootless-deb/aiinputstatusd.m
-          chmod 755 rootless-deb/layout/var/jb/usr/libexec/aiinputstatusd
-          file rootless-deb/layout/var/jb/usr/libexec/aiinputstatusd | grep -q 'arm64e'
-      - name: Package and verify DEB
+            -I"$THEOS/vendor/include" -L"$THEOS/vendor/lib/iphone/roothide" \
+            -D THEOS_PACKAGE_SCHEME_ROOTHIDE=1 \
+            -fobjc-arc -framework Foundation -framework CoreFoundation -lroothide \
+            -Werror -Wall -Wextra \
+            -o stage/usr/libexec/aiinputstatusd rootless-deb/aiinputstatusd.m
+          chmod 755 stage/usr/libexec/aiinputstatusd
+          file stage/usr/libexec/aiinputstatusd | grep -q arm64e
+          cp layout/Library/LaunchDaemons/com.gan1quan.aiinputstatus.background.plist stage/Library/LaunchDaemons/
+      - name: Merge daemon into tweak package
         run: |
-          set -eu
-          chmod 755 rootless-deb/DEBIAN/postinst rootless-deb/DEBIAN/prerm rootless-deb/DEBIAN/postrm
-          rm -rf dist deb-work
-          mkdir -p dist deb-work/control deb-work/data
-          cp rootless-deb/DEBIAN/control deb-work/control/control
-          cp rootless-deb/DEBIAN/postinst deb-work/control/postinst
-          cp rootless-deb/DEBIAN/prerm deb-work/control/prerm
-          cp rootless-deb/DEBIAN/postrm deb-work/control/postrm
-          chmod 755 deb-work/control/postinst deb-work/control/prerm deb-work/control/postrm
-          cp -R rootless-deb/layout/* deb-work/data/
-          printf '2.0\n' > deb-work/debian-binary
-          tar -C deb-work/control --format=ustar -czf dist/control.tar.gz control postinst prerm postrm
-          tar -C deb-work/data --format=ustar -czf dist/data.tar.gz .
-          ar -r dist/AI-INPUT-Status-Background-v1.0.1-arm64e.deb deb-work/debian-binary dist/control.tar.gz dist/data.tar.gz
-          test "$(ar -t dist/AI-INPUT-Status-Background-v1.0.1-arm64e.deb | tr '\n' ' ')" = "debian-binary control.tar.gz data.tar.gz "
-          grep -q '^Package: com.gan1quan.aiinputstatus.background$' deb-work/control/control
-          grep -q '^Version: 1.0.1$' deb-work/control/control
-          grep -q '^Architecture: iphoneos-arm64$' deb-work/control/control
-          ! grep -q -- '--install' deb-work/control/postinst
-          sh -n deb-work/control/postinst
-          sh -n deb-work/control/prerm
-          sh -n deb-work/control/postrm
-          test -x rootless-deb/layout/var/jb/usr/libexec/aiinputstatusd
-          tar -tzf dist/data.tar.gz | grep -q '^./var/jb/usr/libexec/aiinputstatusd$'
-          tar -tzf dist/data.tar.gz | grep -q '^./var/jb/Library/LaunchDaemons/com.gan1quan.aiinputstatus.background.plist$'
-          shasum -a 256 dist/AI-INPUT-Status-Background-v1.0.1-arm64e.deb
+          set -euxo pipefail
+          PKG="$(find packages -name '*.deb' -print -quit)"
+          PKG_ABS="$(cd "$(dirname "$PKG")" && pwd)/$(basename "$PKG")"
+          rm -rf merge
+          mkdir -p merge/control merge/data
+          (cd merge && ar x "$PKG_ABS")
+          CONTROL_TAR="$(find merge -name 'control.tar.*' -print -quit)"
+          DATA_TAR="$(find merge -name 'data.tar.*' -print -quit)"
+          tar -xf "$CONTROL_TAR" -C merge/control
+          tar -xf "$DATA_TAR" -C merge/data
+          cp -R stage/. merge/data/
+          rm -f merge/data.tar.*
+          tar -C merge/data --format=ustar -czf merge/data.tar.gz .
+          rm -f packages/*.deb
+          ar -r "packages/AI-INPUT-Status-Background-v1.1.0-arm64e.deb" merge/debian-binary "$CONTROL_TAR" merge/data.tar.gz
+      - name: Verify package
+        run: |
+          set -euxo pipefail
+          PKG="packages/AI-INPUT-Status-Background-v1.1.0-arm64e.deb"
+          PKG_ABS="$(cd "$(dirname "$PKG")" && pwd)/$(basename "$PKG")"
+          ar t "$PKG"
+          rm -rf verify
+          mkdir -p verify/control verify/data
+          (cd verify && ar x "$PKG_ABS")
+          CONTROL_TAR="$(find verify -name 'control.tar.*' -print -quit)"
+          DATA_TAR="$(find verify -name 'data.tar.*' -print -quit)"
+          tar -xf "$CONTROL_TAR" -C verify/control
+          tar -xf "$DATA_TAR" -C verify/data
+          grep -q '^Architecture: iphoneos-arm64e$' verify/control/control
+          test -f verify/data/usr/libexec/aiinputstatusd
+          test -f verify/data/Library/MobileSubstrate/DynamicLibraries/AIInputStatusSpringBoard.dylib
+          test -f verify/data/Library/MobileSubstrate/DynamicLibraries/AIInputStatusSpringBoard.plist
+          if grep -R '/var/jb' verify/control verify/data/Library verify/data/usr; then
+            echo 'forbidden hard-coded /var/jb path found' >&2
+            exit 1
+          fi
+          shasum -a 256 "$PKG"
       - uses: actions/upload-artifact@v4
         with:
-          name: AI-INPUT-Status-Background-v1.0.1-arm64e
-          path: dist/AI-INPUT-Status-Background-v1.0.1-arm64e.deb
+          name: AI-INPUT-Status-Background-v1.1.0-arm64e
+          path: packages/AI-INPUT-Status-Background-v1.1.0-arm64e.deb
           if-no-files-found: error

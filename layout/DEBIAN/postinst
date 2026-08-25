@@ -1,11 +1,7 @@
 #!/bin/sh
 
-# Maintainer scripts run synchronously under dpkg. Do not invoke the daemon
-# directly here: it is a long-running process managed by launchd.
 set +e
-
-JBROOT="/var/jb"
-PLIST="$JBROOT/Library/LaunchDaemons/com.gan1quan.aiinputstatus.background.plist"
+PLIST="/Library/LaunchDaemons/com.gan1quan.aiinputstatus.background.plist"
 
 case "$1" in
   configure|abort-upgrade|abort-remove|abort-deconfigure)

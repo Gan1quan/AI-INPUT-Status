@@ -102,8 +102,9 @@ struct PluginStatus: Codable {
     let lastFailure: TimeInterval
     let lastInterval: TimeInterval
     let lastError: String?
+    let payload: String?
     enum CodingKeys: String, CodingKey {
-        case version, daemon, attempts, successes, failures
+        case version, daemon, attempts, successes, failures, payload
         case lastAttempt = "last_attempt", lastSuccess = "last_success", lastFailure = "last_failure"
         case lastInterval = "last_interval", lastError = "last_error"
     }
@@ -143,7 +144,8 @@ final class StatusStore: ObservableObject {
     @Published private(set) var pluginStatus: PluginStatus?
     @Published private(set) var pluginCheckedAt: Date?
     private let endpoint = URL(string: "https://status.input.im/api/status")!
-    private let pluginURL = URL(string: "http://127.0.0.1:17891/")!
+    private let daemonStatusURL = URL(string: "http://127.0.0.1:17891/status")!
+    private let daemonRefreshURL = URL(string: "http://127.0.0.1:17891/refresh")!
     private let cacheKey = "ai-input-status-cache.v3"
     private let legacyCacheKey = "ai-input-status-cache.v2"
     private let observationKey = "ai-input-status-observations.v1"
@@ -172,7 +174,7 @@ final class StatusStore: ObservableObject {
 
     func loadPluginStatus() async {
         do {
-            var request = URLRequest(url: pluginURL)
+            var request = URLRequest(url: daemonStatusURL)
             request.timeoutInterval = 1.5
             let (data, response) = try await URLSession.shared.data(for: request)
             guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
@@ -181,6 +183,34 @@ final class StatusStore: ObservableObject {
             pluginStatus = nil
         }
         pluginCheckedAt = Date()
+    }
+
+    private func requestDaemonPayload(refresh: Bool) async throws -> Data {
+        var request = URLRequest(url: refresh ? daemonRefreshURL : daemonStatusURL)
+        request.timeoutInterval = refresh ? 14 : 2
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw StatusRequestError(message: "后台服务无有效响应") }
+        guard (200..<300).contains(http.statusCode) else { throw StatusRequestError(message: "后台服务 HTTP \(http.statusCode)") }
+        let status = try JSONDecoder().decode(PluginStatus.self, from: data)
+        pluginStatus = status
+        pluginCheckedAt = Date()
+        guard let payload = status.payload, let payloadData = payload.data(using: .utf8) else {
+            throw StatusRequestError(message: "后台服务尚未生成状态数据")
+        }
+        return payloadData
+    }
+
+    private func requestPublicPayload() async throws -> Data {
+        var request = URLRequest(url: endpoint)
+        request.timeoutInterval = 12
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw StatusRequestError(message: "未收到有效 HTTP 响应") }
+        guard (200..<300).contains(http.statusCode) else { throw StatusRequestError(message: "HTTP \(http.statusCode)") }
+        return data
     }
 
     func refresh(source: String = "前台") async -> Bool {
@@ -207,17 +237,13 @@ final class StatusStore: ObservableObject {
             isRefreshing = false
         }
         do {
-            var request = URLRequest(url: endpoint)
-            request.timeoutInterval = 12
-            request.cachePolicy = .reloadIgnoringLocalCacheData
-            request.setValue("application/json", forHTTPHeaderField: "Accept")
-            request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse else {
-                throw StatusRequestError(message: "未收到有效 HTTP 响应")
-            }
-            guard (200..<300).contains(http.statusCode) else {
-                throw StatusRequestError(message: "HTTP \(http.statusCode)")
+            let data: Data
+            do {
+                // The DEB owns polling and SpringBoard wakes it; the IPA only consumes its result.
+                data = try await requestDaemonPayload(refresh: true)
+            } catch {
+                // Keep the app useful when the tweak is not installed or is being restarted.
+                data = try await requestPublicPayload()
             }
             let fetchedAt = Date()
             let value = CachedStatus(snapshot: try decodeSnapshot(data), fetchedAt: fetchedAt, lastError: nil)
@@ -233,9 +259,7 @@ final class StatusStore: ObservableObject {
             saveDiagnostics()
             return true
         } catch {
-            if Task.isCancelled || (error as? URLError)?.code == .cancelled {
-                return false
-            }
+            if Task.isCancelled || (error as? URLError)?.code == .cancelled { return false }
             let message = readableError(error)
             lastRefreshError = message
             diagnostics.lastFailureAt = Date()
@@ -654,7 +678,7 @@ struct SettingsView: View {
             Form {
                 Section("刷新") {
                     LabeledContent("前台刷新周期", value: "30 秒")
-                    LabeledContent("后台刷新", value: "系统不保证")
+                    LabeledContent("后台主链路", value: "SpringBoard → DEB")
                     LabeledContent("本次启动刷新", value: "\(store.refreshCount) 次")
                 }
                 Section("后台插件") {
@@ -673,7 +697,7 @@ struct SettingsView: View {
                 Section("后台实际记录") {
                     LabeledContent("系统 fetch 调用", value: "\(store.diagnostics.backgroundFetches) 次")
                     LabeledContent("后台成功 / 失败", value: "\(store.diagnostics.backgroundSuccesses) / \(store.diagnostics.backgroundFailures)")
-                    Text("后台由 iOS 或后台插件调度；这里仅记录实际回调与请求结果，不能代表固定 30 秒执行。")
+                    Text("后台由 SpringBoard Darwin 通知唤醒 DEB；iOS 系统 fetch 仅作为兼容回退。这里记录 IPA 实际回调与请求结果。")
                         .font(.footnote)
                         .foregroundColor(.secondary)
                 }
@@ -691,7 +715,7 @@ struct SettingsView: View {
                 }
                 Section("关于") {
                     Link("打开官方状态页", destination: URL(string: "https://status.input.im/")!)
-                    Text("AI INPUT Status 3.2.1").foregroundColor(.secondary)
+                    Text("AI INPUT Status 3.3.0").foregroundColor(.secondary)
                 }
             }
             .navigationTitle("设置")
