@@ -60,11 +60,11 @@ jobs:
           rm -f merge/data.tar.*
           tar -C merge/data --format=ustar -czf merge/data.tar.gz .
           rm -f packages/*.deb
-          ar -r "packages/AI-INPUT-Status-Background-v1.1.0-arm64e.deb" merge/debian-binary "$CONTROL_TAR" merge/data.tar.gz
+          ar -r "packages/AI-INPUT-Status-Background-v1.1.1-arm64e.deb" merge/debian-binary "$CONTROL_TAR" merge/data.tar.gz
       - name: Verify package
         run: |
           set -euxo pipefail
-          PKG="packages/AI-INPUT-Status-Background-v1.1.0-arm64e.deb"
+          PKG="packages/AI-INPUT-Status-Background-v1.1.1-arm64e.deb"
           PKG_ABS="$(cd "$(dirname "$PKG")" && pwd)/$(basename "$PKG")"
           ar t "$PKG"
           rm -rf verify
@@ -85,6 +85,6 @@ jobs:
           shasum -a 256 "$PKG"
       - uses: actions/upload-artifact@v4
         with:
-          name: AI-INPUT-Status-Background-v1.1.0-arm64e
-          path: packages/AI-INPUT-Status-Background-v1.1.0-arm64e.deb
+          name: AI-INPUT-Status-Background-v1.1.1-arm64e
+          path: packages/AI-INPUT-Status-Background-v1.1.1-arm64e.deb
           if-no-files-found: error

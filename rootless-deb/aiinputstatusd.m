@@ -44,8 +44,11 @@ static PollState *LoadState(void) {
     s.version = 2;
     NSData *data = [NSData dataWithContentsOfFile:ResolvedPath(kStatePath)];
     if (!data) data = [NSData dataWithContentsOfFile:ResolvedPath(kLegacyStatePath)];
-    NSDictionary *d = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-    if (![d isKindOfClass:[NSDictionary class]]) return s;
+    if (!data) return s;
+    NSError *jsonError = nil;
+    id object = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonError];
+    if (jsonError || ![object isKindOfClass:[NSDictionary class]]) return s;
+    NSDictionary *d = (NSDictionary *)object;
     s.version = [d[@"version"] integerValue] ?: 2;
     s.attempts = [d[@"attempts"] integerValue];
     s.successes = [d[@"successes"] integerValue];
