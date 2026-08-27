@@ -27,4 +27,4 @@ curl -sS http://127.0.0.1:17891/refresh
 cat /var/aiinputstatusd-state.json
 ```
 
-`/refresh` is throttled to avoid duplicate network requests. System Background Fetch remains only a compatibility fallback and is not used as a fixed timer.
+`/refresh` is throttled to avoid duplicate network requests. Background polling is owned by the RootHide DEB; the native IPA only refreshes while foregrounded.
