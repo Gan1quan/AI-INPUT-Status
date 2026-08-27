@@ -1,28 +1,27 @@
 # AI INPUT Status Native
 
-独立 SwiftUI iOS App，最低支持 iOS 16.1，版本 3.3.2。
+原生 SwiftUI IPA，对齐 Scripting 3.4.2 的非 Widget 功能，最低支持 iOS 16.1。
 
-## 后台架构
+## 已实现
 
-IPA 不再把系统 Background Fetch 当成固定定时器。安装 RootHide DEB 后，SpringBoard 通过 Darwin notification 唤醒 `aiinputstatusd`，daemon 每 30 秒轮询并保存状态；IPA 通过 `127.0.0.1:17891/refresh` 获取 daemon 的 `payload`。daemon 不存在时，IPA 回退到公网 API。
+- RootHide DEB 优先的公共状态读取（127.0.0.1:17891/refresh）；
+- 官方模型状态与 60/180/240 分钟历史窗口；
+- 网关 HEAD 延迟（三次并发取中位数）和 HTTP 分类；
+- 最多 20 个自定义 HTTPS 监测目标；
+- 结构化诊断、异常/恢复事件；
+- 订阅额度、每日/每周/每月用量、余额和到期日；
+- Token 仅存储在 iOS Keychain；
+- 额度趋势和耗尽预估；
+- 状态、额度、到期本地通知；
+- 浅色/深色自适应终端风格 UI。
 
-系统 Background Fetch 已移除，后台统一由 SpringBoard → DEB 负责。
+## 明确不包含
 
-## GitHub 构建
+- Widget：目标系统为 iOS 16.1，本项目按要求不构建 Widget Extension；
+- DEB 修改：继续使用现有 RootHide DEB 1.1.1，IPA 不向 daemon 下发 Token。
 
-1. 打开 Actions → `Build IPA` → 运行 workflow，下载 `AI-INPUT-Status-v3.3.2`。
-2. 使用 TrollStore 或其他适用签名工具安装未签名 IPA。
-3. 打开 Actions → `Build RootHide Background DEB`，下载 `AI-INPUT-Status-Background-v1.1.1-arm64e`。
-4. 在 Dopamine RootHide 环境安装 DEB，重启 SpringBoard，再打开 IPA。
-5. 在设置页确认“后台插件：运行中”。
+## 构建
 
-## 设备排查
+GitHub Actions → `Build IPA` → Artifact `AI-INPUT-Status-v3.4.2-native`。
 
-```sh
-curl -sS http://127.0.0.1:17891/status
-curl -sS http://127.0.0.1:17891/refresh
-cat /var/aiinputstatusd-state.json
-cat /var/aiinputstatusd.log
-```
-
-注意：RootHide 使用随机 jbroot，工程没有硬编码 `/var/jb`。如果 daemon 未运行，先检查 launchd 服务和 SpringBoard tweak 注入，不要重复安装 IPA。
+这是未签名 IPA，需要 TrollStore 或其他适用签名工具安装。

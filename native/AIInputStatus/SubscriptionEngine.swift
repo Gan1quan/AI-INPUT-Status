@@ -1,0 +1,247 @@
+import Foundation
+
+private struct SubscriptionEnvelope: Decodable {
+    let data: [RawSubscription]?
+}
+
+private struct RawSubscription: Decodable {
+    let expiresAt: String?
+    let status: String?
+    let dailyUsageUSD: Double?
+    let weeklyUsageUSD: Double?
+    let monthlyUsageUSD: Double?
+    let group: RawSubscriptionGroup?
+    enum CodingKeys: String, CodingKey {
+        case expiresAt = "expires_at", status
+        case dailyUsageUSD = "daily_usage_usd"
+        case weeklyUsageUSD = "weekly_usage_usd"
+        case monthlyUsageUSD = "monthly_usage_usd"
+        case group
+    }
+}
+
+private struct RawSubscriptionGroup: Decodable {
+    let name: String?
+    let platform: String?
+    let rateMultiplier: Double?
+    let dailyLimitUSD: Double?
+    enum CodingKeys: String, CodingKey {
+        case name, platform
+        case rateMultiplier = "rate_multiplier"
+        case dailyLimitUSD = "daily_limit_usd"
+    }
+}
+
+private struct SubscriptionCache: Codable {
+    let plans: [SubscriptionPlan]
+    let fetchedAt: Date
+}
+
+private struct TrendSample: Codable {
+    let date: Date
+    let usage: Double
+}
+
+enum SubscriptionEngine {
+    private static let cacheKey = "ai-input-subscription-native-cache-v3"
+    private static let trendKey = "ai-input-subscription-native-trend-v1"
+    private static let cacheMaxAge: TimeInterval = 30 * 60
+
+    private static var encoder: JSONEncoder {
+        let value = JSONEncoder()
+        value.dateEncodingStrategy = .iso8601
+        return value
+    }
+
+    private static var decoder: JSONDecoder {
+        let value = JSONDecoder()
+        value.dateDecodingStrategy = .iso8601
+        return value
+    }
+
+    static var tokenConfigured: Bool {
+        !SecureStore.readToken().trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    static func cached() -> SubscriptionSnapshot? {
+        guard let data = UserDefaults.standard.data(forKey: cacheKey),
+              let value = try? decoder.decode(SubscriptionCache.self, from: data) else { return nil }
+        return SubscriptionSnapshot(plans: value.plans, fetchedAt: value.fetchedAt, fromCache: true)
+    }
+
+    static func fetch() async throws -> SubscriptionSnapshot {
+        let token = SecureStore.readToken().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty else { throw StatusEngineError.subscription("未配置订阅 Token") }
+        var request = URLRequest(url: subscriptionEndpoint)
+        request.timeoutInterval = 25
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else { throw StatusEngineError.subscription("订阅接口无有效响应") }
+            guard (200..<300).contains(http.statusCode) else {
+                if http.statusCode == 401 || http.statusCode == 403 { throw StatusEngineError.subscription("Token 已失效，请重新导入") }
+                if http.statusCode >= 500 { throw StatusEngineError.subscription("订阅接口暂时异常") }
+                throw StatusEngineError.subscription("订阅接口 HTTP \(http.statusCode)")
+            }
+            let envelope = try decoder.decode(SubscriptionEnvelope.self, from: data)
+            let plans = (envelope.data ?? []).compactMap(normalize).filter { $0.expiresAt > Date() }
+            let snapshot = SubscriptionSnapshot(plans: plans, fetchedAt: Date(), fromCache: false)
+            save(snapshot)
+            recordFreshSample(snapshot)
+            return snapshot
+        } catch let error as StatusEngineError { throw error }
+        catch let error as URLError {
+            if error.code == .timedOut { throw StatusEngineError.subscription("订阅请求超时") }
+            if error.code == .cancelled { throw StatusEngineError.subscription("订阅请求被取消") }
+            throw StatusEngineError.subscription("订阅网络不可用")
+        } catch is DecodingError {
+            throw StatusEngineError.subscription("订阅数据格式异常")
+        } catch {
+            throw StatusEngineError.subscription("订阅请求失败")
+        }
+    }
+
+    static func save(_ snapshot: SubscriptionSnapshot) {
+        let cache = SubscriptionCache(plans: snapshot.plans, fetchedAt: snapshot.fetchedAt)
+        guard let data = try? encoder.encode(cache) else { return }
+        UserDefaults.standard.set(data, forKey: cacheKey)
+    }
+
+    static func displaySnapshot(_ snapshot: SubscriptionSnapshot?, error: String?) -> SubscriptionSnapshot? {
+        guard let snapshot else { return nil }
+        return SubscriptionSnapshot(plans: snapshot.plans, fetchedAt: snapshot.fetchedAt, fromCache: true, error: error)
+    }
+
+    private static func normalize(_ raw: RawSubscription) -> SubscriptionPlan? {
+        guard let group = raw.group,
+              let name = group.name?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !name.isEmpty,
+              let expiresText = raw.expiresAt,
+              let expires = parseDate(expiresText) else { return nil }
+        return SubscriptionPlan(
+            name: name,
+            platform: group.platform ?? "unknown",
+            rateMultiplier: finite(group.rateMultiplier, fallback: 1),
+            dailyLimitUSD: finite(group.dailyLimitUSD),
+            dailyUsageUSD: finite(raw.dailyUsageUSD),
+            weeklyUsageUSD: finite(raw.weeklyUsageUSD),
+            monthlyUsageUSD: finite(raw.monthlyUsageUSD),
+            expiresAt: expires,
+            status: raw.status == "active" ? "active" : "inactive"
+        )
+    }
+
+    private static func finite(_ value: Double?, fallback: Double = 0) -> Double {
+        guard let value, value.isFinite, value >= 0 else { return fallback }
+        return value
+    }
+
+    private static func parseDate(_ value: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let result = formatter.date(from: value) { return result }
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: value)
+    }
+
+    static func health(_ snapshot: SubscriptionSnapshot?, tokenConfigured: Bool, error: String?) -> SubscriptionHealth {
+        guard tokenConfigured else { return .unconfigured }
+        let detail = error ?? snapshot?.error ?? ""
+        if detail.contains("Token 已失效") || detail.contains("401") || detail.contains("403") { return .unauthorized }
+        if detail.contains("网络") || detail.contains("超时") { return .networkError }
+        if detail.contains("格式") { return .invalidResponse }
+        if let snapshot {
+            if snapshot.age > cacheMaxAge { return .stale }
+            return snapshot.fromCache ? .cached : .ready
+        }
+        return detail.isEmpty ? .unknown : .serverError
+    }
+
+    static func healthLabel(_ health: SubscriptionHealth) -> String {
+        switch health {
+        case .ready: return "已实时更新"
+        case .cached: return "使用缓存"
+        case .stale: return "缓存已过期"
+        case .unconfigured: return "未配置 Token"
+        case .unauthorized: return "Token 已失效"
+        case .networkError: return "网络不可用"
+        case .serverError: return "接口异常"
+        case .invalidResponse: return "数据异常"
+        case .unknown: return "等待读取"
+        }
+    }
+
+    static func summary(_ plans: [SubscriptionPlan], now: Date = Date()) -> SubscriptionSummary {
+        let active = plans.filter { $0.isActive(at: now) }
+        let limit = active.reduce(0) { $0 + $1.dailyLimitUSD }
+        let usage = active.reduce(0) { $0 + min($1.dailyUsageUSD, $1.dailyLimitUSD) }
+        let expiring = active.filter { $0.expiresAt.timeIntervalSince(now) <= 7 * 86_400 }.count
+        return SubscriptionSummary(activePlans: active.count, totalLimitUSD: limit, totalUsageUSD: usage, totalRemainingUSD: max(0, limit - usage), expiringSoonCount: expiring)
+    }
+
+    static func sortedPlans(_ plans: [SubscriptionPlan], now: Date = Date()) -> [SubscriptionPlan] {
+        plans.sorted {
+            if $0.isActive(at: now) != $1.isActive(at: now) { return $0.isActive(at: now) }
+            if $0.remainingUSD != $1.remainingUSD { return $0.remainingUSD < $1.remainingUSD }
+            return $0.expiresAt < $1.expiresAt
+        }
+    }
+
+    static func resetLabel(now: Date = Date()) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        let next = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now)) ?? now
+        let minutes = max(1, Int(next.timeIntervalSince(now) / 60))
+        return minutes >= 60 ? "上海 00:00 · \(minutes / 60)h\(minutes % 60)m" : "上海 00:00 · \(minutes)m"
+    }
+
+    static func expiryLabel(_ date: Date, now: Date = Date()) -> String {
+        let days = Int(ceil(date.timeIntervalSince(now) / 86_400))
+        if days <= 0 { return "已到期" }
+        if days <= 7 { return "\(days) 天后到期" }
+        return "到期 \(shortDate(date))"
+    }
+
+    static func shortDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "yyyy/M/d"
+        return formatter.string(from: date)
+    }
+
+    static func freshnessLabel(_ snapshot: SubscriptionSnapshot?) -> String {
+        guard let snapshot else { return "无订阅数据" }
+        if !snapshot.fromCache && snapshot.error == nil { return "额度实时" }
+        if snapshot.age > cacheMaxAge { return "额度缓存过期" }
+        let minutes = Int(snapshot.age / 60)
+        return minutes < 1 ? "额度缓存刚刚" : "额度缓存 \(minutes)m"
+    }
+
+    static func trend(_ plans: [SubscriptionPlan], now: Date = Date()) -> (label: String, estimate: String?) {
+        let samples = loadTrend().filter { Calendar.current.isDate($0.date, inSameDayAs: now) }
+        guard samples.count >= 2, let first = samples.first, let last = samples.last else { return ("趋势采样中", nil) }
+        let hours = max(1.0 / 60, last.date.timeIntervalSince(first.date) / 3600)
+        let rate = (last.usage - first.usage) / hours
+        let label = rate > 0.01 ? "消耗上升" : rate < -0.01 ? "用量下降" : "用量稳定"
+        let remaining = summary(plans, now: now).totalRemainingUSD
+        let estimate = rate > 0 && remaining > 0 ? String(format: "预计 %.1fh 用尽", remaining / rate) : nil
+        return (label, estimate)
+    }
+
+    private static func loadTrend() -> [TrendSample] {
+        guard let data = UserDefaults.standard.data(forKey: trendKey), let value = try? decoder.decode([TrendSample].self, from: data) else { return [] }
+        return Array(value.suffix(24))
+    }
+
+    static func recordFreshSample(_ snapshot: SubscriptionSnapshot) {
+        guard !snapshot.fromCache, snapshot.error == nil else { return }
+        let old = loadTrend()
+        guard old.last == nil || snapshot.fetchedAt.timeIntervalSince(old.last!.date) >= 600 else { return }
+        let usage = summary(snapshot.plans, now: snapshot.fetchedAt).totalUsageUSD
+        let values = (old + [TrendSample(date: snapshot.fetchedAt, usage: usage)]).filter { snapshot.fetchedAt.timeIntervalSince($0.date) <= 3 * 86_400 }
+        guard let data = try? encoder.encode(Array(values.suffix(24))) else { return }
+        UserDefaults.standard.set(data, forKey: trendKey)
+    }
+}

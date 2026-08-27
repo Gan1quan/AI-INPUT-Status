@@ -55,18 +55,18 @@ jobs:
           /usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP_PATH/Info.plist"
           VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_PATH/Info.plist")
           BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP_PATH/Info.plist")
-          test "$VERSION" = "3.3.2"
-          test "$BUILD" = "9"
+          test "$VERSION" = "3.4.2"
+          test "$BUILD" = "10"
           echo "Verified native IPA version $VERSION ($BUILD)"
-          rm -rf Payload AI-INPUT-Status-v3.3.2.ipa
+          rm -rf Payload AI-INPUT-Status-v3.4.2-native.ipa
           mkdir Payload
           cp -R "$APP_PATH" Payload/
-          /usr/bin/zip -qry AI-INPUT-Status-v3.3.2.ipa Payload
-          unzip -l AI-INPUT-Status-v3.3.2.ipa
-          unzip -p AI-INPUT-Status-v3.3.2.ipa Payload/AIInputStatus.app/Info.plist | plutil -p -
+          /usr/bin/zip -qry AI-INPUT-Status-v3.4.2-native.ipa Payload
+          unzip -l AI-INPUT-Status-v3.4.2-native.ipa
+          unzip -p AI-INPUT-Status-v3.4.2-native.ipa Payload/AIInputStatus.app/Info.plist | plutil -p -
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: AI-INPUT-Status-v3.3.2
-          path: native/AI-INPUT-Status-v3.3.2.ipa
+          name: AI-INPUT-Status-v3.4.2-native
+          path: native/AI-INPUT-Status-v3.4.2-native.ipa
           if-no-files-found: error
