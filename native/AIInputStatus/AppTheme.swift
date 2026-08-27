@@ -41,11 +41,11 @@ enum AppTheme {
             ? UIColor(red: 0.16, green: 0.23, blue: 0.18, alpha: 1)
             : UIColor(red: 0.70, green: 0.75, blue: 0.72, alpha: 1)
     })
-    static let monoTitle = Font.system(size: 22, weight: .bold, design: .monospaced)
-    static let monoModel = Font.system(size: 20, weight: .bold, design: .monospaced)
-    static let monoBody = Font.system(size: 16, weight: .regular, design: .monospaced)
-    static let monoMeta = Font.system(size: 13, weight: .regular, design: .monospaced)
-    static let monoSmall = Font.system(size: 11, weight: .regular, design: .monospaced)
+    static let monoTitle = Font.system(size: 20, weight: .bold, design: .monospaced)
+    static let monoModel = Font.system(size: 17, weight: .bold, design: .monospaced)
+    static let monoBody = Font.system(size: 14, weight: .regular, design: .monospaced)
+    static let monoMeta = Font.system(size: 11, weight: .regular, design: .monospaced)
+    static let monoSmall = Font.system(size: 10, weight: .regular, design: .monospaced)
 }
 
 extension View {
