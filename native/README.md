@@ -4,7 +4,8 @@
 
 ## 已实现
 
-- RootHide DEB 优先的公共状态读取（127.0.0.1:17891/refresh）；
+- RootHide DEB 优先的公共状态读取（127.0.0.1:17891/refresh）；无 RootHide 时自动回退公共 API；
+- iOS BGAppRefreshTask 后台状态刷新（系统调度，非固定周期）；
 - 官方模型状态与 60/180/240 分钟历史窗口；
 - 网关 HEAD 延迟（三次并发取中位数）和 HTTP 分类；
 - 最多 20 个自定义 HTTPS 监测目标；

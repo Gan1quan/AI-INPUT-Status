@@ -20,13 +20,13 @@ enum StatusNetwork {
     private static let gatewayTimeout: TimeInterval = 6
     private static let customTimeout: TimeInterval = 6
 
-    static func loadStatus() async throws -> StatusLoadResult {
+    static func loadStatus(daemonTimeout: TimeInterval = 14) async throws -> StatusLoadResult {
         async let gatewayTask = measureGateway()
         let payload: Data
         let source: DataSource
         var plugin: PluginStatus?
         do {
-            let result = try await loadDaemonPayload()
+            let result = try await loadDaemonPayload(timeout: daemonTimeout)
             payload = result.payload
             plugin = result.plugin
             source = .daemon
@@ -50,8 +50,8 @@ enum StatusNetwork {
         return (envelope.pluginStatus, envelope.payload?.data(using: .utf8))
     }
 
-    private static func loadDaemonPayload() async throws -> (payload: Data, plugin: PluginStatus) {
-        let data = try await request(daemonRefreshEndpoint, timeout: 14)
+    private static func loadDaemonPayload(timeout: TimeInterval) async throws -> (payload: Data, plugin: PluginStatus) {
+        let data = try await request(daemonRefreshEndpoint, timeout: timeout)
         let envelope = try StatusEngine.decodeDaemonEnvelope(data)
         guard let body = envelope.payload?.data(using: .utf8) else { throw StatusEngineError.noDaemonPayload }
         return (body, envelope.pluginStatus)
