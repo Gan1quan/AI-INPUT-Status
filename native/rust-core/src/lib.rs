@@ -6,8 +6,11 @@ pub extern "C" fn ai_input_classify_error(message: *const c_char) -> i32 {
     if message.is_null() { return 0; }
     let text = unsafe { CStr::from_ptr(message) }.to_string_lossy().to_lowercase();
     if text.contains("model_not_found")
+        || text.contains("model not found")
         || text.contains("not supported by any configured account")
         || text.contains("unknown model")
+        || text.contains("状态接口未返回")
+        || (text.contains("404") && text.contains("model"))
         || text.contains("模型未配置") { 1
     } else if text.contains("401") || text.contains("403") || text.contains("unauthorized") || text.contains("认证") || text.contains("token") { 2
     } else if text.contains("quota") || text.contains("余额不足") || text.contains("额度耗尽") || text.contains("insufficient") { 3

@@ -6,6 +6,8 @@ let statusEndpoint = URL(string: "https://status.input.im/api/status")!
 let gatewayEndpoint = URL(string: "https://ai.input.im")!
 let daemonStatusEndpoint = URL(string: "http://127.0.0.1:17891/status")!
 let daemonRefreshEndpoint = URL(string: "http://127.0.0.1:17891/refresh")!
+let daemonLogsEndpoint = URL(string: "http://127.0.0.1:17891/logs")!
+let daemonResetCountersEndpoint = URL(string: "http://127.0.0.1:17891/reset-counts")!
 let subscriptionEndpoint = URL(string: "https://ai.input.im/api/v1/subscriptions?timezone=Asia%2FShanghai")!
 let defaultTargetModels = ["gpt-5.6-sol", "gpt-5.6-terra"]
 let sharedDefaults = UserDefaults(suiteName: "group.com.gan1quan.aiinputstatus") ?? .standard
@@ -40,7 +42,7 @@ enum DataSource: String, Codable { case daemon, publicAPI, cache }
 enum GatewayClassification: String, Codable { case ok, redirect, clientError, serverError, networkError, timeout, unavailable }
 
 enum ServiceState: String {
-    case online, offline, misconfigured, unauthorized, quotaExhausted, rateLimited
+    case online, waiting, notConfigured, offline, misconfigured, unauthorized, quotaExhausted, rateLimited
     case timeout, networkError, serverError, clientError, stale, unknown
 }
 
@@ -48,7 +50,12 @@ enum ServiceIssue: Int, Equatable {
     case generic = 0, configuration, authentication, quota, rateLimit, timeout, network, server, client
 
     static func from(_ message: String?) -> ServiceIssue {
-        ServiceIssue(rawValue: RustCore.errorKind(message)) ?? .generic
+        guard let message else { return .generic }
+        let normalized = message.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalized.contains("状态接口未返回") || normalized.contains("model_not_found") || normalized.contains("model not found") || normalized.contains("not supported by any configured account") {
+            return .configuration
+        }
+        return ServiceIssue(rawValue: RustCore.errorKind(message)) ?? .generic
     }
 
     var state: ServiceState {
@@ -152,6 +159,17 @@ struct StatusSnapshot: Codable, Hashable {
     var age: TimeInterval { max(0, Date().timeIntervalSince(fetchedAt)) }
 }
 
+struct BackendLogEntry: Codable, Hashable, Identifiable {
+    let timestamp: TimeInterval
+    let level: String
+    let event: String
+    let detail: String
+
+    var id: String { "\(timestamp)-\(event)-\(detail)" }
+    var date: Date { Date(timeIntervalSince1970: timestamp) }
+    enum CodingKeys: String, CodingKey { case timestamp = "ts", level, event, detail }
+}
+
 struct PluginStatus: Codable, Hashable {
     let version: Int
     let daemon: String
@@ -164,8 +182,9 @@ struct PluginStatus: Codable, Hashable {
     let lastInterval: TimeInterval
     let lastError: String?
     let payload: String?
+    let logs: [BackendLogEntry]
     enum CodingKeys: String, CodingKey {
-        case version, daemon, attempts, successes, failures, payload
+        case version, daemon, attempts, successes, failures, payload, logs
         case lastAttempt = "last_attempt", lastSuccess = "last_success", lastFailure = "last_failure"
         case lastInterval = "last_interval", lastError = "last_error"
     }
@@ -184,8 +203,9 @@ struct DaemonEnvelope: Decodable {
     let lastInterval: Double?
     let lastError: String?
     let payload: String?
+    let logs: [BackendLogEntry]?
     enum CodingKeys: String, CodingKey {
-        case version, daemon, attempts, successes, failures, payload
+        case version, daemon, attempts, successes, failures, payload, logs
         case lastAttempt = "last_attempt", lastSuccess = "last_success", lastFailure = "last_failure"
         case lastInterval = "last_interval", lastError = "last_error"
     }
@@ -193,7 +213,8 @@ struct DaemonEnvelope: Decodable {
         PluginStatus(version: version ?? 0, daemon: daemon ?? "unknown", attempts: attempts ?? 0,
                      successes: successes ?? 0, failures: failures ?? 0, lastAttempt: lastAttempt ?? 0,
                      lastSuccess: lastSuccess ?? 0, lastFailure: lastFailure ?? 0,
-                     lastInterval: lastInterval ?? 0, lastError: lastError, payload: payload)
+                     lastInterval: lastInterval ?? 0, lastError: lastError, payload: payload,
+                     logs: logs ?? [])
     }
 }
 
@@ -237,6 +258,13 @@ struct ModelMonitor: Codable, Hashable, Identifiable {
 enum HistoryRange: Int, CaseIterable, Hashable {
     case sixty = 60, oneEighty = 180, twoForty = 240
     var label: String { "\(rawValue)m" }
+    var fullLabel: String {
+        switch self {
+        case .sixty: return "60 分钟"
+        case .oneEighty: return "3 小时"
+        case .twoForty: return "4 小时"
+        }
+    }
 }
 
 struct HistorySummary {
@@ -330,7 +358,7 @@ struct SubscriptionSummary {
     let expiringSoonCount: Int
 }
 
-enum SubscriptionHealth { case ready, cached, stale, unconfigured, unauthorized, networkError, serverError, invalidResponse, unknown }
+enum SubscriptionHealth: Equatable { case ready, cached, stale, unconfigured, unauthorized, networkError, serverError, invalidResponse, unknown }
 
 struct NotificationSettings: Codable, Hashable {
     var enabled = true
@@ -361,13 +389,16 @@ struct CachedEnvelope: Codable { let version: Int; let snapshot: StatusSnapshot 
 
 // MARK: - UI support
 
-enum DiagnosticFilter: String, CaseIterable, Identifiable {
-    case all, healthy, configuration, authentication, quota, rateLimit, timeout, network, server, client
+enum DiagnosticFilter: String, CaseIterable, Identifiable, Hashable {
+    case all, healthy, issues, waiting, stale, configuration, authentication, quota, rateLimit, timeout, network, server, client
     var id: String { rawValue }
     var label: String {
         switch self {
         case .all: return "全部"
         case .healthy: return "正常"
+        case .issues: return "异常"
+        case .waiting: return "待检测"
+        case .stale: return "已过期"
         case .configuration: return "配置"
         case .authentication: return "认证"
         case .quota: return "额度"
@@ -378,12 +409,48 @@ enum DiagnosticFilter: String, CaseIterable, Identifiable {
         case .client: return "请求"
         }
     }
+    var icon: String {
+        switch self {
+        case .all: return "line.3.horizontal.decrease.circle"
+        case .healthy: return "checkmark.circle"
+        case .issues: return "exclamationmark.triangle"
+        case .waiting: return "hourglass"
+        case .stale: return "clock.badge.exclamationmark"
+        case .configuration: return "slider.horizontal.3"
+        case .authentication: return "person.badge.key"
+        case .quota: return "chart.pie"
+        case .rateLimit: return "gauge.with.dots.needle.67percent"
+        case .timeout: return "timer"
+        case .network: return "wifi.exclamationmark"
+        case .server: return "server.rack"
+        case .client: return "curlybraces.square"
+        }
+    }
 }
 
-enum ServiceGrouping: String, CaseIterable, Identifiable {
+enum ServiceGrouping: String, CaseIterable, Identifiable, Hashable {
     case model, provider, account
     var id: String { rawValue }
-    var label: String { switch self { case .model: return "按模型"; case .provider: return "按供应商"; case .account: return "按账号" } }
+    var label: String {
+        switch self {
+        case .model: return "模型"
+        case .provider: return "供应商"
+        case .account: return "账号"
+        }
+    }
+}
+
+enum ServiceSort: String, CaseIterable, Identifiable, Hashable {
+    case issuesFirst, latency, availability, name
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .issuesFirst: return "异常优先"
+        case .latency: return "延迟最低"
+        case .availability: return "可用率最高"
+        case .name: return "名称排序"
+        }
+    }
 }
 
 enum ExportFormat { case csv, json }

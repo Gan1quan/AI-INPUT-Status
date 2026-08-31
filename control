@@ -1,6 +1,6 @@
 Package: com.gan1quan.aiinputstatus.background
 Name: AI INPUT Status Background
-Version: 1.1.1
+Version: 1.2.0
 Architecture: iphoneos-arm64e
 Description: RootHide SpringBoard-triggered background status poller for AI INPUT Status
 Maintainer: AI INPUT Status

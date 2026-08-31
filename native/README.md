@@ -1,27 +1,24 @@
-# AI INPUT Status Native
+# AI INPUT Status Native v3.6.0
 
-原生 SwiftUI IPA，对齐 Scripting 3.4.2 的非 Widget 功能，最低支持 iOS 16.1。
+原生 SwiftUI IPA，最低支持 iOS 16.1。
 
-## 已实现
+## 主要能力
 
-- RootHide DEB 优先的公共状态读取（127.0.0.1:17891/refresh）；
-- 官方模型状态与 60/180/240 分钟历史窗口；
-- 网关 HEAD 延迟（三次并发取中位数）和 HTTP 分类；
-- 最多 20 个自定义 HTTPS 监测目标；
-- 结构化诊断、异常/恢复事件；
-- 订阅额度、每日/每周/每月用量、余额和到期日；
-- Token 仅存储在 iOS Keychain；
-- 额度趋势和耗尽预估；
-- 状态、额度、到期本地通知；
-- 浅色/深色自适应终端风格 UI。
+- 优先读取 RootHide DEB 状态，回退公共 API；
+- 模型状态、真实时间窗口历史、延迟 p50/p95/最大值；
+- 区分正常、待检测、接口未返回、缓存过期、配置/认证/额度/限流/网络等状态；
+- 大尺寸触控控件、搜索、筛选数量、空结果反馈、排序和分组；
+- 小号 / 中号 / 大号 Widget，使用 App Group 共享快照；
+- 模型详情、单模型重新检测、诊断修复、备用模型建议；
+- 订阅额度、本地通知与测试通知、自定义 HTTPS 监测；
+- 诊断报告和可选择类型/范围/格式的日志导出。
 
-## 明确不包含
+## 配套后台服务
 
-- Widget：目标系统为 iOS 16.1，本项目按要求不构建 Widget Extension；
-- DEB 修改：继续使用现有 RootHide DEB 1.1.1，IPA 不向 daemon 下发 Token。
+RootHide DEB v1.2.0 提供后台轮询日志以及请求计数清零接口。未安装 DEB 时，IPA 仍会回退公共 API；后台日志和清零操作会提示安装配套 DEB。
 
 ## 构建
 
-GitHub Actions → `Build IPA` → Artifact `AI-INPUT-Status-v3.4.2-native`。
+GitHub Actions → **Build IPA** → `AI-INPUT-Status-v3.6.0-native`。
 
 这是未签名 IPA，需要 TrollStore 或其他适用签名工具安装。

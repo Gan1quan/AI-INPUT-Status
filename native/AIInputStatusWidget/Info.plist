@@ -5,8 +5,8 @@
 <key>CFBundleDisplayName</key><string>AI INPUT Status</string>
 <key>CFBundleName</key><string>AI INPUT Status</string>
 <key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
-<key>CFBundleShortVersionString</key><string>3.5.0</string>
-<key>CFBundleVersion</key><string>12</string>
+<key>CFBundleShortVersionString</key><string>3.6.0</string>
+<key>CFBundleVersion</key><string>13</string>
 <key>CFBundlePackageType</key><string>XPC!</string>
 <key>NSExtension</key><dict><key>NSExtensionPointIdentifier</key><string>com.apple.widgetkit-extension</string><key>NSExtensionPrincipalClass</key><string>$(PRODUCT_MODULE_NAME).AIInputStatusWidget</string></dict>
 </dict></plist>

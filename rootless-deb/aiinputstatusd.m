@@ -30,6 +30,7 @@ static dispatch_queue_t workQueue;
 @property(nonatomic) NSTimeInterval lastInterval;
 @property(nonatomic, copy) NSString *lastError;
 @property(nonatomic, copy) NSString *payload;
+@property(nonatomic, strong) NSMutableArray<NSDictionary *> *logs;
 @end
 @implementation PollState @end
 
@@ -41,15 +42,15 @@ static NSString *ResolvedPath(NSString *path) {
 
 static PollState *LoadState(void) {
     PollState *s = [PollState new];
-    s.version = 2;
-    NSData *data = [NSData dataWithContentsOfFile:ResolvedPath(kStatePath)];
+    s.version = 3;
+    s.logs = [NSMutableArray array]; = [NSData dataWithContentsOfFile:ResolvedPath(kStatePath)];
     if (!data) data = [NSData dataWithContentsOfFile:ResolvedPath(kLegacyStatePath)];
     if (!data) return s;
     NSError *jsonError = nil;
     id object = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonError];
     if (jsonError || ![object isKindOfClass:[NSDictionary class]]) return s;
     NSDictionary *d = (NSDictionary *)object;
-    s.version = [d[@"version"] integerValue] ?: 2;
+    s.version = [d[@"version"] integerValue] ?: 3;
     s.attempts = [d[@"attempts"] integerValue];
     s.successes = [d[@"successes"] integerValue];
     s.failures = [d[@"failures"] integerValue];
@@ -59,6 +60,11 @@ static PollState *LoadState(void) {
     s.lastInterval = [d[@"last_interval"] doubleValue];
     if ([d[@"last_error"] isKindOfClass:[NSString class]]) s.lastError = d[@"last_error"];
     if ([d[@"payload"] isKindOfClass:[NSString class]]) s.payload = d[@"payload"];
+    NSArray *storedLogs = [d[@"logs"] isKindOfClass:[NSArray class]] ? d[@"logs"] : @[];
+    for (id item in storedLogs) {
+        if ([item isKindOfClass:[NSDictionary class]]) [s.logs addObject:item];
+        if (s.logs.count >= 200) break;
+    }
     return s;
 }
 
@@ -73,7 +79,8 @@ static NSDictionary *StateDictionary(PollState *s) {
               @"last_failure": @(s.lastFailure),
               @"last_interval": @(s.lastInterval),
               @"last_error": s.lastError ?: [NSNull null],
-              @"payload": s.payload ?: [NSNull null] };
+              @"payload": s.payload ?: [NSNull null],
+              @"logs": s.logs ?: @[] };
 }
 
 static void SaveState(PollState *s) {
@@ -82,7 +89,30 @@ static void SaveState(PollState *s) {
     if (data) [data writeToFile:ResolvedPath(kStatePath) atomically:YES];
 }
 
-static BOOL RequestOnce(NSData **bodyOut, NSInteger *codeOut, NSString **errorOut) {
+static void AppendLog(PollState *s, NSString *level, NSString *event, NSString *detail) {
+    if (!s.logs) s.logs = [NSMutableArray array];
+    NSDictionary *entry = @{ @"ts": @([NSDate date].timeIntervalSince1970),
+                             @"level": level ?: @"info",
+                             @"event": event ?: @"",
+                             @"detail": detail ?: @"" };
+    [s.logs insertObject:entry atIndex:0];
+    while (s.logs.count > 200) [s.logs removeLastObject];
+}
+
+static void ResetCounters(PollState *s) {
+    s.attempts = 0;
+    s.successes = 0;
+    s.failures = 0;
+    s.lastAttempt = 0;
+    s.lastSuccess = 0;
+    s.lastFailure = 0;
+    s.lastInterval = 0;
+    s.lastError = nil;
+    AppendLog(s, @"info", @"reset-counters", @"后台累计请求、成功、失败计数已清零");
+    SaveState(s);
+}
+
+
     NSURL *url = [NSURL URLWithString:kEndpoint];
     if (!url) { if (errorOut) *errorOut = @"无效状态服务地址"; return NO; }
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url cachePolicy:NSURLRequestReloadIgnoringLocalCacheData timeoutInterval:kRequestTimeout];
@@ -120,6 +150,7 @@ static void Poll(PollState *s) {
     if (s.lastAttempt > 0) s.lastInterval = now - s.lastAttempt;
     s.lastAttempt = now;
     s.attempts++;
+    AppendLog(s, @"info", @"poll-start", @"开始请求官方状态服务");
     SaveState(s);
 
     NSData *body = nil;
@@ -135,10 +166,12 @@ static void Poll(PollState *s) {
         s.lastSuccess = [NSDate date].timeIntervalSince1970;
         s.lastError = nil;
         s.payload = [[NSString alloc] initWithData:body encoding:NSUTF8StringEncoding];
+        AppendLog(s, @"info", @"poll-success", [NSString stringWithFormat:@"状态服务请求成功（HTTP %ld）", (long)code]);
     } else {
         s.failures++;
         s.lastFailure = [NSDate date].timeIntervalSince1970;
         s.lastError = errorText ?: [NSString stringWithFormat:@"HTTP %ld", (long)code];
+        AppendLog(s, @"error", @"poll-failure", s.lastError);
     }
     SaveState(s);
 }
@@ -191,11 +224,17 @@ static void Serve(PollState *s) {
         __block NSString *reason = @"OK";
         dispatch_sync(workQueue, ^{
             BOOL refresh = [path isEqualToString:@"/refresh"] || [path hasPrefix:@"/refresh?"];
-            if (refresh) {
+            BOOL logs = [path isEqualToString:@"/logs"] || [path hasPrefix:@"/logs?"];
+            BOOL reset = [path isEqualToString:@"/reset-counts"];
+            if (reset) {
+                ResetCounters(s);
+            } else if (logs) {
+                // /logs intentionally returns the same schema so old clients remain compatible.
+            } else if (refresh) {
                 NSTimeInterval age = [NSDate date].timeIntervalSince1970 - s.lastAttempt;
                 if (s.lastAttempt == 0 || age >= kMinimumPollInterval) Poll(s);
                 else if (s.lastError && s.lastSuccess < s.lastAttempt) { code = 503; reason = @"Service Unavailable"; }
-            } else if (![path isEqualToString:@"/"] && ![path isEqualToString:@"/status"] && ![path hasPrefix:@"/status?"] && ![path isEqualToString:@"/health"]) {
+            } else if (![path isEqualToString:@"/"] && ![path isEqualToString:@"/status"] && ![path hasPrefix:@"/status?"] && ![path isEqualToString:@"/health"] && !logs && !reset) {
                 code = 404; reason = @"Not Found";
             }
             if (code == 200 && s.lastError && s.lastSuccess < s.lastAttempt && [path isEqualToString:@"/refresh"]) { code = 503; reason = @"Service Unavailable"; }

@@ -1,8 +1,20 @@
 import Foundation
 
-struct StatusLoadResult { let snapshot: StatusSnapshot; let plugin: PluginStatus? }
-private struct GatewayMeasurement { let statusCode: Int; let latencyMS: Int?; let timedOut: Bool }
-private struct NetworkError: LocalizedError { let message: String; var errorDescription: String? { message } }
+struct StatusLoadResult {
+    let snapshot: StatusSnapshot
+    let plugin: PluginStatus?
+}
+
+private struct GatewayMeasurement {
+    let statusCode: Int
+    let latencyMS: Int?
+    let timedOut: Bool
+}
+
+private struct NetworkError: LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
+}
 
 enum StatusNetwork {
     private static let gatewayTimeout: TimeInterval = 6
@@ -13,6 +25,7 @@ enum StatusNetwork {
         let payload: Data
         let source: DataSource
         var plugin: PluginStatus?
+
         do {
             let result = try await loadDaemonPayload()
             payload = result.payload
@@ -23,12 +36,19 @@ enum StatusNetwork {
             if let daemon = try? await loadDaemonStatus() { plugin = daemon.0 }
             source = .publicAPI
         }
+
         let decoded = try StatusEngine.decodePayload(payload)
         let gateway = await gatewayTask
         let monitors = await probeCustomMonitors(StatusEngine.loadMonitors())
-        let snapshot = StatusSnapshot(generatedAt: decoded.0, services: decoded.1, fetchedAt: Date(), source: source, gateway: gateway, customMonitors: monitors, gatewayFromCache: false, lastError: nil)
+        let snapshot = StatusSnapshot(generatedAt: decoded.0,
+                                      services: decoded.1,
+                                      fetchedAt: Date(),
+                                      source: source,
+                                      gateway: gateway,
+                                      customMonitors: monitors,
+                                      gatewayFromCache: false,
+                                      lastError: nil)
         StatusEngine.saveCustomMonitorResults(monitors)
-        StatusEngine.saveCachedStatus(snapshot)
         return StatusLoadResult(snapshot: snapshot, plugin: plugin)
     }
 
@@ -38,6 +58,17 @@ enum StatusNetwork {
         return (envelope.pluginStatus, envelope.payload?.data(using: .utf8))
     }
 
+    static func loadDaemonLogs() async throws -> [BackendLogEntry] {
+        let data = try await request(daemonLogsEndpoint, timeout: 3)
+        let envelope = try StatusEngine.decodeDaemonEnvelope(data)
+        return envelope.logs ?? envelope.pluginStatus.logs
+    }
+
+    static func resetDaemonCounters() async throws -> PluginStatus {
+        let data = try await request(daemonResetCountersEndpoint, timeout: 5, method: "POST")
+        return try StatusEngine.decodeDaemonEnvelope(data).pluginStatus
+    }
+
     private static func loadDaemonPayload() async throws -> (payload: Data, plugin: PluginStatus) {
         let data = try await request(daemonRefreshEndpoint, timeout: 14)
         let envelope = try StatusEngine.decodeDaemonEnvelope(data)
@@ -45,18 +76,33 @@ enum StatusNetwork {
         return (body, envelope.pluginStatus)
     }
 
-    private static func request(_ url: URL, timeout: TimeInterval) async throws -> Data {
+    private static func request(_ url: URL, timeout: TimeInterval, method: String = "GET") async throws -> Data {
         var request = URLRequest(url: url)
+        request.httpMethod = method
         request.timeoutInterval = timeout
         request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if method != "GET" { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else { throw NetworkError(message: "无有效 HTTP 响应") }
-            guard (200..<300).contains(http.statusCode) else { throw NetworkError(message: "HTTP \(http.statusCode)") }
+            guard (200..<300).contains(http.statusCode) else {
+                if http.statusCode == 404 { throw NetworkError(message: "后台服务不支持此操作，请更新后台 DEB") }
+                throw NetworkError(message: "后台服务 HTTP \(http.statusCode)")
+            }
             return data
-        } catch let error as NetworkError { throw error }
-        catch let error as URLError { throw NetworkError(message: error.code == .timedOut ? "请求超时" : error.code == .cancelled ? "请求已取消" : "网络不可用") }
-        catch { throw NetworkError(message: "网络请求失败") }
+        } catch let error as NetworkError {
+            throw error
+        } catch let error as URLError {
+            switch error.code {
+            case .timedOut: throw NetworkError(message: "本机后台服务请求超时")
+            case .cancelled: throw NetworkError(message: "请求已取消")
+            case .cannotConnectToHost, .networkConnectionLost, .notConnectedToInternet: throw NetworkError(message: "后台服务未连接")
+            default: throw NetworkError(message: "后台服务不可用")
+            }
+        } catch {
+            throw NetworkError(message: "后台服务请求失败")
+        }
     }
 
     static func measureGateway() async -> GatewayStatus {
@@ -72,14 +118,19 @@ enum StatusNetwork {
         }.sorted()
         if !successful.isEmpty {
             let median = successful[successful.count / 2]
-            return GatewayStatus(latencyMS: median, measuredAt: Date(), responseStatus: 200, classification: .ok, detail: "正常 · \(median) ms")
+            return GatewayStatus(latencyMS: median, measuredAt: Date(), responseStatus: 200,
+                                 classification: .ok, detail: "正常 · \(median) ms")
         }
         if let status = measurements.first(where: { $0.statusCode > 0 })?.statusCode {
-            let cls: GatewayClassification = (300..<400).contains(status) ? .redirect : (400..<500).contains(status) ? .clientError : status >= 500 ? .serverError : .unavailable
-            return GatewayStatus(latencyMS: nil, measuredAt: Date(), responseStatus: status, classification: cls, detail: "HTTP \(status)")
+            let cls: GatewayClassification = (300..<400).contains(status) ? .redirect :
+                (400..<500).contains(status) ? .clientError : status >= 500 ? .serverError : .unavailable
+            return GatewayStatus(latencyMS: nil, measuredAt: Date(), responseStatus: status,
+                                 classification: cls, detail: "HTTP \(status)")
         }
         let timeout = measurements.contains { $0.timedOut }
-        return GatewayStatus(latencyMS: nil, measuredAt: Date(), responseStatus: nil, classification: timeout ? .timeout : .networkError, detail: timeout ? "请求超时" : "网络不可用")
+        return GatewayStatus(latencyMS: nil, measuredAt: Date(), responseStatus: nil,
+                             classification: timeout ? .timeout : .networkError,
+                             detail: timeout ? "请求超时" : "网络不可用")
     }
 
     private static func measureGatewayOnce() async -> GatewayMeasurement {
@@ -90,16 +141,26 @@ enum StatusNetwork {
         request.cachePolicy = .reloadIgnoringLocalCacheData
         do {
             let (_, response) = try await URLSession.shared.data(for: request)
-            return GatewayMeasurement(statusCode: (response as? HTTPURLResponse)?.statusCode ?? 0, latencyMS: max(1, Int(Date().timeIntervalSince(started) * 1000)), timedOut: false)
-        } catch let error as URLError { return GatewayMeasurement(statusCode: 0, latencyMS: nil, timedOut: error.code == .timedOut) }
-        catch { return GatewayMeasurement(statusCode: 0, latencyMS: nil, timedOut: false) }
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            return GatewayMeasurement(statusCode: status,
+                                      latencyMS: max(1, Int(Date().timeIntervalSince(started) * 1000)),
+                                      timedOut: false)
+        } catch let error as URLError {
+            return GatewayMeasurement(statusCode: 0, latencyMS: nil, timedOut: error.code == .timedOut)
+        } catch {
+            return GatewayMeasurement(statusCode: 0, latencyMS: nil, timedOut: false)
+        }
     }
 
     static func probeCustomMonitors(_ monitors: [CustomMonitor]) async -> [CustomMonitorResult] {
         await withTaskGroup(of: CustomMonitorResult?.self, returning: [CustomMonitorResult].self) { group in
-            for monitor in monitors.filter(\.enabled) { group.addTask { await probe(monitor) } }
+            for monitor in monitors.filter(\.enabled) {
+                group.addTask { await probe(monitor) }
+            }
             var values: [CustomMonitorResult] = []
-            for await value in group { if let value { values.append(value) } }
+            for await value in group {
+                if let value { values.append(value) }
+            }
             return values.sorted { $0.label.localizedStandardCompare($1.label) == .orderedAscending }
         }
     }
@@ -107,7 +168,11 @@ enum StatusNetwork {
     private static func probe(_ monitor: CustomMonitor) async -> CustomMonitorResult? {
         let previous = StatusEngine.loadCustomMonitorResults().first { $0.id == monitor.id }
         guard StatusEngine.validateMonitorURL(monitor.url), let url = URL(string: monitor.url) else {
-            return CustomMonitorResult(id: monitor.id, label: monitor.label, checkedAt: Date(), latencyMS: nil, statusCode: nil, classification: "invalid-url", detail: "请输入 HTTPS 地址", consecutiveFailures: previous?.consecutiveFailures ?? 0, lastSuccessAt: previous?.lastSuccessAt)
+            return CustomMonitorResult(id: monitor.id, label: monitor.label, checkedAt: Date(), latencyMS: nil,
+                                       statusCode: nil, classification: "invalid-url",
+                                       detail: "请输入有效的 HTTPS 地址",
+                                       consecutiveFailures: previous?.consecutiveFailures ?? 0,
+                                       lastSuccessAt: previous?.lastSuccessAt)
         }
         let started = Date()
         var request = URLRequest(url: url)
@@ -118,14 +183,31 @@ enum StatusNetwork {
             let (_, response) = try await URLSession.shared.data(for: request)
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
             let latency = max(1, Int(Date().timeIntervalSince(started) * 1000))
-            let classification = (300..<400).contains(status) ? "redirect" : (400..<500).contains(status) ? "client-error" : status >= 500 ? "server-error" : latency >= monitor.thresholdMS ? "slow" : "ok"
+            let classification: String
+            if !(200..<300).contains(status) {
+                classification = (300..<400).contains(status) ? "redirect" :
+                    (400..<500).contains(status) ? "client-error" : status >= 500 ? "server-error" : "network-error"
+            } else {
+                classification = latency >= monitor.thresholdMS ? "slow" : "ok"
+            }
             let ok = classification == "ok"
-            return CustomMonitorResult(id: monitor.id, label: monitor.label, checkedAt: Date(), latencyMS: latency, statusCode: status, classification: classification, detail: ok ? "正常 · \(latency) ms" : classification == "slow" ? "延迟过高 · \(latency) ms" : "HTTP \(status)", consecutiveFailures: ok ? 0 : (previous?.consecutiveFailures ?? 0) + 1, lastSuccessAt: ok ? Date() : previous?.lastSuccessAt)
+            return CustomMonitorResult(id: monitor.id, label: monitor.label, checkedAt: Date(), latencyMS: latency,
+                                       statusCode: status, classification: classification,
+                                       detail: ok ? "正常 · \(latency) ms" : classification == "slow" ? "延迟过高 · \(latency) ms" : "HTTP \(status)",
+                                       consecutiveFailures: ok ? 0 : (previous?.consecutiveFailures ?? 0) + 1,
+                                       lastSuccessAt: ok ? Date() : previous?.lastSuccessAt)
         } catch let error as URLError {
             let timeout = error.code == .timedOut
-            return CustomMonitorResult(id: monitor.id, label: monitor.label, checkedAt: Date(), latencyMS: nil, statusCode: nil, classification: timeout ? "timeout" : "network-error", detail: timeout ? "请求超时" : "网络不可用", consecutiveFailures: (previous?.consecutiveFailures ?? 0) + 1, lastSuccessAt: previous?.lastSuccessAt)
+            return CustomMonitorResult(id: monitor.id, label: monitor.label, checkedAt: Date(), latencyMS: nil,
+                                       statusCode: nil, classification: timeout ? "timeout" : "network-error",
+                                       detail: timeout ? "请求超时" : "网络不可用",
+                                       consecutiveFailures: (previous?.consecutiveFailures ?? 0) + 1,
+                                       lastSuccessAt: previous?.lastSuccessAt)
         } catch {
-            return CustomMonitorResult(id: monitor.id, label: monitor.label, checkedAt: Date(), latencyMS: nil, statusCode: nil, classification: "network-error", detail: "探测失败", consecutiveFailures: (previous?.consecutiveFailures ?? 0) + 1, lastSuccessAt: previous?.lastSuccessAt)
+            return CustomMonitorResult(id: monitor.id, label: monitor.label, checkedAt: Date(), latencyMS: nil,
+                                       statusCode: nil, classification: "network-error", detail: "探测失败",
+                                       consecutiveFailures: (previous?.consecutiveFailures ?? 0) + 1,
+                                       lastSuccessAt: previous?.lastSuccessAt)
         }
     }
 }

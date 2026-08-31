@@ -5,8 +5,8 @@
 <key>CFBundleDisplayName</key><string>AI INPUT Status</string>
 <key>CFBundleName</key><string>AI INPUT Status</string>
 <key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
-<key>CFBundleShortVersionString</key><string>3.5.0</string>
-<key>CFBundleVersion</key><string>12</string>
+<key>CFBundleShortVersionString</key><string>3.6.0</string>
+<key>CFBundleVersion</key><string>13</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>LSRequiresIPhoneOS</key><true/>
 <key>UILaunchScreen</key><dict><key>UIColorName</key><string>LaunchBackground</string></dict>

@@ -17,6 +17,7 @@ targets:
     platform: iOS
     sources:
       - path: AIInputStatus
+      - path: Shared
     dependencies:
       - target: AIInputStatusWidget
         embed: true
@@ -41,6 +42,7 @@ targets:
     platform: iOS
     sources:
       - path: AIInputStatusWidget
+      - path: Shared
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.gan1quan.aiinputstatus.widget

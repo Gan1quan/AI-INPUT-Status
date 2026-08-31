@@ -53,15 +53,15 @@ jobs:
           test -f "$APP_PATH/PlugIns/AIInputStatusWidget.appex/AIInputStatusWidget"
           VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_PATH/Info.plist")
           BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP_PATH/Info.plist")
-          test "$VERSION" = "3.5.0"
-          test "$BUILD" = "12"
-          rm -rf Payload AI-INPUT-Status-v3.5.0-native.ipa
+          test "$VERSION" = "3.6.0"
+          test "$BUILD" = "13"
+          rm -rf Payload AI-INPUT-Status-v3.6.0-native.ipa
           mkdir Payload
           cp -R "$APP_PATH" Payload/
-          /usr/bin/zip -qry AI-INPUT-Status-v3.5.0-native.ipa Payload
+          /usr/bin/zip -qry AI-INPUT-Status-v3.6.0-native.ipa Payload
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: AI-INPUT-Status-v3.5.0-native
-          path: native/AI-INPUT-Status-v3.5.0-native.ipa
+          name: AI-INPUT-Status-v3.6.0-native
+          path: native/AI-INPUT-Status-v3.6.0-native.ipa
           if-no-files-found: error

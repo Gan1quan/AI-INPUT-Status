@@ -12,10 +12,12 @@ enum SubscriptionEngine {
     private static let cacheMaxAge: TimeInterval = 30 * 60
     private static var encoder: JSONEncoder { let value = JSONEncoder(); value.dateEncodingStrategy = .iso8601; return value }
     private static var decoder: JSONDecoder { let value = JSONDecoder(); value.dateDecodingStrategy = .iso8601; return value }
-    static var tokenConfigured: Bool { !SecureStore.readToken().trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    static var tokenConfigured: Bool { !normalizedToken(SecureStore.readToken()).isEmpty }
+
     static func cached() -> SubscriptionSnapshot? { guard let data = sharedDefaults.data(forKey: cacheKey), let value = try? decoder.decode(SubscriptionCache.self, from: data) else { return nil }; return SubscriptionSnapshot(plans: value.plans, fetchedAt: value.fetchedAt, fromCache: true) }
     static func fetch() async throws -> SubscriptionSnapshot {
-        let token = SecureStore.readToken().trimmingCharacters(in: .whitespacesAndNewlines); guard !token.isEmpty else { throw StatusEngineError.subscription("未配置订阅 Token") }
+        let token = normalizedToken(SecureStore.readToken())
+        guard !token.isEmpty else { throw StatusEngineError.subscription("未配置订阅 Token") }
         var request = URLRequest(url: subscriptionEndpoint); request.timeoutInterval = 25; request.cachePolicy = .reloadIgnoringLocalCacheData; request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization"); request.setValue("application/json", forHTTPHeaderField: "Accept")
         do { let (data, response) = try await URLSession.shared.data(for: request); guard let http = response as? HTTPURLResponse else { throw StatusEngineError.subscription("订阅接口无有效响应") }; guard (200..<300).contains(http.statusCode) else { if http.statusCode == 401 || http.statusCode == 403 { throw StatusEngineError.subscription("Token 已失效，请重新导入") }; if http.statusCode >= 500 { throw StatusEngineError.subscription("订阅接口暂时异常") }; throw StatusEngineError.subscription("订阅接口 HTTP \(http.statusCode)") }; let envelope = try decoder.decode(SubscriptionEnvelope.self, from: data); let plans = (envelope.data ?? []).compactMap(normalize).filter { $0.expiresAt > Date() }; let snapshot = SubscriptionSnapshot(plans: plans, fetchedAt: Date(), fromCache: false); save(snapshot); recordFreshSample(snapshot); return snapshot } catch let error as StatusEngineError { throw error } catch let error as URLError { throw StatusEngineError.subscription(error.code == .timedOut ? "订阅请求超时" : error.code == .cancelled ? "订阅请求被取消" : "订阅网络不可用") } catch is DecodingError { throw StatusEngineError.subscription("订阅数据格式异常") } catch { throw StatusEngineError.subscription("订阅请求失败") }
     }

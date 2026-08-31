@@ -7,7 +7,17 @@ enum NotificationEngine {
         (try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])) ?? false
     }
 
-    static func notifyStatusOpened(_ events: [StatusEvent]) async {
+    static func notifyTest() async {
+        let content = UNMutableNotificationContent()
+        content.title = "AI INPUT 通知测试"
+        content.body = "本地通知功能正常。"
+        content.sound = .default
+        content.threadIdentifier = "ai-input-status"
+        let request = UNNotificationRequest(identifier: "ai-input-test-\(Int(Date().timeIntervalSince1970))", content: content, trigger: nil)
+        try? await UNUserNotificationCenter.current().add(request)
+    }
+
+
         guard !events.isEmpty else { return }
         let content = UNMutableNotificationContent()
         content.title = "AI INPUT 状态异常"
