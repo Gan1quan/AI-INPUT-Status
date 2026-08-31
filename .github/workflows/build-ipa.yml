@@ -28,6 +28,7 @@ jobs:
       - name: Test Rust core
         working-directory: native
         run: cargo test --manifest-path rust-core/Cargo.toml
+      - name: Generate project
         working-directory: native
         run: |
           xcodegen generate
