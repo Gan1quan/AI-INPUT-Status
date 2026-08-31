@@ -53,8 +53,8 @@ jobs:
           test -f "$APP_PATH/PlugIns/AIInputStatusWidget.appex/AIInputStatusWidget"
           VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_PATH/Info.plist")
           BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP_PATH/Info.plist")
-          test "$VERSION" = "3.4.2"
-          test "$BUILD" = "11"
+          test "$VERSION" = "3.5.0"
+          test "$BUILD" = "12"
           rm -rf Payload AI-INPUT-Status-v3.5.0-native.ipa
           mkdir Payload
           cp -R "$APP_PATH" Payload/
