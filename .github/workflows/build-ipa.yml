@@ -21,6 +21,7 @@ jobs:
       - name: Build Rust core
         working-directory: native
         run: |
+          echo "Building Rust FFI core for aarch64 iOS"
           cargo build --manifest-path rust-core/Cargo.toml --release --target aarch64-apple-ios
           mkdir -p RustCore
           cp rust-core/target/aarch64-apple-ios/release/libai_input_core.a RustCore/

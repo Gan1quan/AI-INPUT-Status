@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import WidgetKit
 
 private struct WidgetProbe: Decodable { let ok: Bool? }
@@ -21,5 +22,5 @@ struct AIInputStatusWidgetProvider: TimelineProvider {
         return AIInputStatusWidgetEntry(date: Date(), available: available, total: total, remaining: remaining, freshness: freshness)
     }
 }
-struct AIInputStatusWidgetView: View { let entry: AIInputStatusWidgetEntry; var body: some View { VStack(alignment: .leading, spacing: 5) { HStack { Text("AI INPUT").font(.system(.headline, design: .monospaced)); Spacer(); Image(systemName: entry.available == entry.total && entry.total > 0 ? "checkmark.circle.fill" : "exclamationmark.circle.fill") }; Text("模型 \(entry.available)/\(entry.total) 可用").font(.system(.body, design: .monospaced)); Text("剩余 \(entry.remaining)").font(.system(.body, design: .monospaced)).bold(); Text(entry.freshness).font(.caption2).foregroundStyle(.secondary) }.containerBackground(for: .widget) { Color.black } } }
+struct AIInputStatusWidgetView: View { let entry: AIInputStatusWidgetEntry; var body: some View { VStack(alignment: .leading, spacing: 5) { HStack { Text("AI INPUT").font(.system(.headline, design: .monospaced)); Spacer(); Image(systemName: entry.available == entry.total && entry.total > 0 ? "checkmark.circle.fill" : "exclamationmark.circle.fill") }; Text("模型 \(entry.available)/\(entry.total) 可用").font(.system(.body, design: .monospaced)); Text("剩余 \(entry.remaining)").font(.system(.body, design: .monospaced)).bold(); Text(entry.freshness).font(.caption2).foregroundStyle(.secondary) }.background(Color.black) } }
 @main struct AIInputStatusWidget: Widget { let kind = "AIInputStatusWidget"; var body: some WidgetConfiguration { StaticConfiguration(kind: kind, provider: AIInputStatusWidgetProvider()) { entry in AIInputStatusWidgetView(entry: entry) }.configurationDisplayName("AI INPUT 状态").description("显示模型可用性和订阅剩余额度").supportedFamilies([.systemSmall, .systemMedium]) } }

@@ -17,8 +17,6 @@ targets:
     platform: iOS
     sources:
       - path: AIInputStatus
-        excludes:
-          - AIInputStatus-Bridging-Header.h
     dependencies:
       - target: AIInputStatusWidget
         embed: true
