@@ -21,18 +21,21 @@ final class StatusStore: ObservableObject {
     @Published var serviceGrouping: ServiceGrouping = .model
     @Published var tokenDraft = ""
     @Published var sharePayload: SharePayload?
+    @Published var lastActionMessage: String?
 
     private var foregroundTask: Task<Void, Never>?
     private var statusRequestActive = false
     private var subscriptionRequestActive = false
 
-    init() {
+    init(autoRefresh: Bool = true) {
         snapshot = StatusEngine.loadCachedStatus()
         subscription = SubscriptionEngine.cached()
         notificationSettings = StatusEngine.loadNotificationSettings()
         monitors = StatusEngine.loadMonitors()
         modelMonitors = StatusEngine.loadModelMonitors()
-        Task { [weak self] in await self?.refresh(source: "启动") }
+        if autoRefresh {
+            Task { [weak self] in await self?.refresh(source: "启动") }
+        }
     }
 
     deinit { foregroundTask?.cancel() }
@@ -213,27 +216,53 @@ final class StatusStore: ObservableObject {
         }
     }
 
-    func backup(for service: ServiceStatus) -> ServiceStatus? { snapshot?.services.first { $0.id != service.id && StatusEngine.serviceState($0) == .online } }
+    func backup(for service: ServiceStatus) -> ServiceStatus? {
+        guard let services = snapshot?.services else { return nil }
+        let candidates = services.filter { $0.id != service.id }
+        let states = candidates.map { StatusEngine.serviceState($0) == .online ? true : false }
+        let latencies = candidates.map { $0.last?.latencyMS }
+        guard let index = RustCore.chooseBackup(states: states, latencies: latencies), candidates.indices.contains(index) else { return nil }
+        return candidates[index]
+    }
 
     func diagnosticReport(format: ExportFormat) -> String {
         guard let snapshot else { return "暂无状态数据" }
         let diagnostics = StatusEngine.diagnostics(snapshot, settings: notificationSettings)
         switch format {
         case .json:
-            let payload: [String: Any] = ["generated_at": ISO8601DateFormatter().string(from: snapshot.generatedAt), "fetched_at": ISO8601DateFormatter().string(from: snapshot.fetchedAt), "source": StatusEngine.dataTrustLabel(snapshot), "services": snapshot.services.map { ["model": $0.model, "state": stateText(StatusEngine.serviceState($0)), "latency_ms": $0.last?.latencyMS as Any, "error": $0.last?.error ?? ""] }, "diagnostics": diagnostics.map { ["title": $0.title, "detail": $0.detail, "technical_detail": $0.technicalDetail ?? ""] }]
+            let serviceRows: [[String: Any]] = snapshot.services.map { service in
+                let config = modelMonitors.first { $0.model == service.model }
+                var row: [String: Any] = ["model": service.model, "state": stateText(StatusEngine.serviceState(service)), "latency_ms": service.last?.latencyMS ?? NSNull(), "error": service.last?.error ?? ""]
+                row["provider"] = config?.provider ?? ""
+                row["account"] = config?.account ?? ""
+                row["issue"] = ServiceIssue.from(service.last?.error).title
+                return row
+            }
+            let payload: [String: Any] = ["generated_at": ISO8601DateFormatter().string(from: snapshot.generatedAt), "fetched_at": ISO8601DateFormatter().string(from: snapshot.fetchedAt), "source": StatusEngine.dataTrustLabel(snapshot), "services": serviceRows, "diagnostics": diagnostics.map { ["title": $0.title, "detail": $0.detail, "technical_detail": $0.technicalDetail ?? ""] }]
             guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys]) else { return "{}" }
             return String(data: data, encoding: .utf8) ?? "{}"
         case .csv:
-            return (["model,state,latency_ms,error"] + snapshot.services.map { "\(csv($0.model)),\(csv(stateText(StatusEngine.serviceState($0)))),\($0.last?.latencyMS.map(String.init) ?? ""),\(csv($0.last?.error ?? ""))" }).joined(separator: "\n")
+            let header = "model,provider,account,state,issue,latency_ms,error"
+            let rows = snapshot.services.map { service -> String in
+                let config = modelMonitors.first { $0.model == service.model }
+                return [service.model, config?.provider ?? "", config?.account ?? "", stateText(StatusEngine.serviceState(service)), ServiceIssue.from(service.last?.error).title, service.last?.latencyMS.map(String.init) ?? "", service.last?.error ?? ""].map(csv).joined(separator: ",")
+            }
+            return ([header] + rows).joined(separator: "\n")
         }
     }
 
-    func copyDiagnosticReport() { UIPasteboard.general.string = diagnosticReport(format: .json) }
+    func copyDiagnosticReport() {
+        UIPasteboard.general.string = diagnosticReport(format: .json)
+        lastActionMessage = "诊断报告已复制到剪贴板"
+    }
 
     func export(format: ExportFormat) {
         let ext = format == .json ? "json" : "csv"
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("ai-input-status-\(Int(Date().timeIntervalSince1970)).\(ext)")
-        do { try diagnosticReport(format: format).data(using: .utf8)?.write(to: url); sharePayload = SharePayload(url: url) } catch { lastError = "导出失败：\(error.localizedDescription)" }
+            try diagnosticReport(format: format).data(using: .utf8)?.write(to: url, options: .atomic)
+            sharePayload = SharePayload(url: url)
+            lastActionMessage = "已生成 \(ext.uppercased()) 报告"
+        } catch { lastError = "导出失败：\(error.localizedDescription)" }
     }
 
     private func csv(_ value: String) -> String { "\"\(value.replacingOccurrences(of: "\"", with: "\"\""))\"" }

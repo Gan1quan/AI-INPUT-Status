@@ -13,5 +13,7 @@
 <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
 <key>ITSAppUsesNonExemptEncryption</key><false/>
 <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
+<key>BGTaskSchedulerPermittedIdentifiers</key><array><string>com.gan1quan.aiinputstatus.refresh</string></array>
+<key>UIBackgroundModes</key><array><string>fetch</string></array>
 
 </dict></plist>
