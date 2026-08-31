@@ -1,0 +1,15 @@
+#!/bin/sh
+
+set +e
+PLIST="/Library/LaunchDaemons/com.gan1quan.aiinputstatus.background.plist"
+
+case "$1" in
+  configure|abort-upgrade|abort-remove|abort-deconfigure)
+    if [ -f "$PLIST" ] && command -v launchctl >/dev/null 2>&1; then
+      launchctl bootout system "$PLIST" >/dev/null 2>&1
+      launchctl bootstrap system "$PLIST" >/dev/null 2>&1 || launchctl load "$PLIST" >/dev/null 2>&1
+    fi
+    ;;
+esac
+
+exit 0

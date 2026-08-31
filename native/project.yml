@@ -1,0 +1,56 @@
+name: AIInputStatus
+options:
+  bundleIdPrefix: com.gan1quan
+  deploymentTarget:
+    iOS: "16.1"
+  developmentLanguage: zh-Hans
+  xcodeVersion: "15.4"
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    IPHONEOS_DEPLOYMENT_TARGET: "16.1"
+    TARGETED_DEVICE_FAMILY: "1,2"
+    SUPPORTS_MACCATALYST: NO
+targets:
+  AIInputStatus:
+    type: application
+    platform: iOS
+    sources:
+      - path: AIInputStatus
+        excludes:
+          - AIInputStatus-Bridging-Header.h
+    dependencies:
+      - target: AIInputStatusWidget
+        embed: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.gan1quan.aiinputstatus
+        PRODUCT_NAME: AIInputStatus
+        INFOPLIST_FILE: AIInputStatus/Info.plist
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGN_IDENTITY: ""
+        DEVELOPMENT_TEAM: ""
+        SWIFT_OBJC_BRIDGING_HEADER: AIInputStatus/AIInputStatus-Bridging-Header.h
+        OTHER_LDFLAGS: "$(inherited) -L$(PROJECT_DIR)/RustCore -lai_input_core"
+        CODE_SIGN_ENTITLEMENTS: ../roothide.entitlements
+        LIBRARY_SEARCH_PATHS: "$(inherited) $(PROJECT_DIR)/RustCore"
+    scheme:
+      gatherCoverageData: false
+      testTargets: []
+  AIInputStatusWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: AIInputStatusWidget
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.gan1quan.aiinputstatus.widget
+        PRODUCT_NAME: AIInputStatusWidget
+        INFOPLIST_FILE: AIInputStatusWidget/Info.plist
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGN_IDENTITY: ""
+        DEVELOPMENT_TEAM: ""
+        SKIP_INSTALL: YES
+        CODE_SIGN_ENTITLEMENTS: widget.entitlements

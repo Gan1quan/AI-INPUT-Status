@@ -1,0 +1,90 @@
+name: Build RootHide Background DEB
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+    paths:
+      - "Makefile"
+      - "control"
+      - "layout/**"
+      - "rootless-deb/**"
+      - ".github/workflows/deb-build.yml"
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install RootHide Theos and ldid
+        run: |
+          brew install ldid
+          git clone --recursive --depth=1 https://github.com/roothide/theos.git "$HOME/theos"
+          echo "THEOS=$HOME/theos" >> "$GITHUB_ENV"
+      - name: Build SpringBoard tweak
+        run: |
+          set -euxo pipefail
+          chmod 755 layout/DEBIAN/postinst layout/DEBIAN/prerm layout/DEBIAN/postrm
+          make clean package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide
+          test -n "$(find packages -name '*.deb' -print -quit)"
+      - name: Build arm64e daemon
+        run: |
+          set -euxo pipefail
+          mkdir -p stage/usr/libexec stage/Library/LaunchDaemons
+          xcrun clang -target arm64e-apple-ios16.1 -isysroot "$(xcrun --sdk iphoneos --show-sdk-path)" \
+            -I"$THEOS/vendor/include" -L"$THEOS/vendor/lib/iphone/roothide" \
+            -D THEOS_PACKAGE_SCHEME_ROOTHIDE=1 \
+            -fobjc-arc -framework Foundation -framework CoreFoundation -lroothide \
+            -Werror -Wall -Wextra \
+            -o stage/usr/libexec/aiinputstatusd rootless-deb/aiinputstatusd.m
+          chmod 755 stage/usr/libexec/aiinputstatusd
+          # A clang-produced executable is not launchable on iOS until it has
+          # an ad-hoc code signature. Theos signs the tweak automatically;
+          # sign the standalone daemon explicitly before packaging it.
+          ldid -Sroothide.entitlements stage/usr/libexec/aiinputstatusd
+          ldid -h stage/usr/libexec/aiinputstatusd
+          file stage/usr/libexec/aiinputstatusd | grep -q arm64e
+          cp layout/Library/LaunchDaemons/com.gan1quan.aiinputstatus.background.plist stage/Library/LaunchDaemons/
+      - name: Merge daemon into tweak package
+        run: |
+          set -euxo pipefail
+          PKG="$(find packages -name '*.deb' -print -quit)"
+          PKG_ABS="$(cd "$(dirname "$PKG")" && pwd)/$(basename "$PKG")"
+          rm -rf merge
+          mkdir -p merge/control merge/data
+          (cd merge && ar x "$PKG_ABS")
+          CONTROL_TAR="$(find merge -name 'control.tar.*' -print -quit)"
+          DATA_TAR="$(find merge -name 'data.tar.*' -print -quit)"
+          tar -xf "$CONTROL_TAR" -C merge/control
+          tar -xf "$DATA_TAR" -C merge/data
+          cp -R stage/. merge/data/
+          rm -f merge/data.tar.*
+          tar -C merge/data --format=ustar -czf merge/data.tar.gz .
+          rm -f packages/*.deb
+          ar -r "packages/AI-INPUT-Status-Background-v1.1.1-arm64e.deb" merge/debian-binary "$CONTROL_TAR" merge/data.tar.gz
+      - name: Verify package
+        run: |
+          set -euxo pipefail
+          PKG="packages/AI-INPUT-Status-Background-v1.1.1-arm64e.deb"
+          PKG_ABS="$(cd "$(dirname "$PKG")" && pwd)/$(basename "$PKG")"
+          ar t "$PKG"
+          rm -rf verify
+          mkdir -p verify/control verify/data
+          (cd verify && ar x "$PKG_ABS")
+          CONTROL_TAR="$(find verify -name 'control.tar.*' -print -quit)"
+          DATA_TAR="$(find verify -name 'data.tar.*' -print -quit)"
+          tar -xf "$CONTROL_TAR" -C verify/control
+          tar -xf "$DATA_TAR" -C verify/data
+          grep -q '^Architecture: iphoneos-arm64e$' verify/control/control
+          test -f verify/data/usr/libexec/aiinputstatusd
+          test -f verify/data/Library/MobileSubstrate/DynamicLibraries/AIInputStatusSpringBoard.dylib
+          test -f verify/data/Library/MobileSubstrate/DynamicLibraries/AIInputStatusSpringBoard.plist
+          if grep -R '/var/jb' verify/control verify/data/Library verify/data/usr; then
+            echo 'forbidden hard-coded /var/jb path found' >&2
+            exit 1
+          fi
+          shasum -a 256 "$PKG"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AI-INPUT-Status-Background-v1.1.1-arm64e
+          path: packages/AI-INPUT-Status-Background-v1.1.1-arm64e.deb
+          if-no-files-found: error
