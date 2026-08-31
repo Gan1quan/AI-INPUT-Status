@@ -12,7 +12,14 @@ enum SubscriptionEngine {
     private static let cacheMaxAge: TimeInterval = 30 * 60
     private static var encoder: JSONEncoder { let value = JSONEncoder(); value.dateEncodingStrategy = .iso8601; return value }
     private static var decoder: JSONDecoder { let value = JSONDecoder(); value.dateDecodingStrategy = .iso8601; return value }
-    static var tokenConfigured: Bool { !normalizedToken(SecureStore.readToken()).isEmpty }
+    static func tokenConfigured(_ token: String) -> Bool { !normalizedToken(token).isEmpty }
+    static var tokenConfigured: Bool { tokenConfigured(SecureStore.readToken()) }
+
+    static func normalizedToken(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 7, trimmed.prefix(7).lowercased() == "bearer " else { return trimmed }
+        return String(trimmed.dropFirst(7)).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
     static func cached() -> SubscriptionSnapshot? { guard let data = sharedDefaults.data(forKey: cacheKey), let value = try? decoder.decode(SubscriptionCache.self, from: data) else { return nil }; return SubscriptionSnapshot(plans: value.plans, fetchedAt: value.fetchedAt, fromCache: true) }
     static func fetch() async throws -> SubscriptionSnapshot {

@@ -529,14 +529,18 @@ final class StatusStore: ObservableObject {
             return String(data: data, encoding: .utf8) ?? "{}"
         case .csv:
             let header = "model,provider,account,state,issue,latency_ms,uptime_percent,observed,missing,error"
-            let rows = snapshot.services.map { service -> String in
-                let config = modelMonitors.first { $0.model == service.model }
-                let summary = StatusEngine.historySummary(service, range: historyRange)
-                return [service.model, config?.provider ?? "", config?.account ?? "", stateText(StatusEngine.serviceState(service)),
-                        ServiceIssue.from(service.last?.error).title, service.last?.latencyMS.map(String.init) ?? "",
-                        service.uptimePercent.map { String(format: "%.1f", $0) } ?? "", "\(summary.observed)", "\(summary.missing)", service.last?.error ?? ""].map(csv).joined(separator: ",")
-            }
-            return ([header] + rows).joined(separator: "\n")
+        let rows: [String] = snapshot.services.map { service in
+            let model = service.model
+            let config = modelMonitors.first { $0.model == model }
+            let history = StatusEngine.historySummary(service, range: historyRange)
+            let state = stateText(StatusEngine.serviceState(service))
+            let issue = ServiceIssue.from(service.last?.error).title
+            let latency = service.last?.latencyMS.map(String.init) ?? ""
+            let uptime = service.uptimePercent.map { String(format: "%.1f", $0) } ?? ""
+            let fields = [model, config?.provider ?? "", config?.account ?? "", state, issue, latency, uptime, "\(history.observed)", "\(history.missing)", service.last?.error ?? ""]
+            return fields.map(csv).joined(separator: ",")
+        }
+        return ([header] + rows).joined(separator: "\n")
         }
     }
 
@@ -656,7 +660,7 @@ final class StatusStore: ObservableObject {
     private func publishWidgetData() {
         let configs = configuredModels
         let services: [WidgetServiceData] = configs.map { config in
-            guard let service = snapshot?.services.first(where: { $0.model == config.model }) else {
+            guard let service = self.snapshot?.services.first(where: { $0.model == config.model }) else {
                 return WidgetServiceData(model: config.model, state: "waiting", stateLabel: "待检测", latencyMS: nil,
                                          uptimePercent: nil, windowSuccessRate: nil, observed: 0, window: historyRange.rawValue, error: nil)
             }
@@ -703,19 +707,19 @@ final class StatusStore: ObservableObject {
             source = "waiting"
             sourceText = "等待首次检测"
         }
-        let snapshot = WidgetDataSnapshot(version: WidgetDataSnapshot.currentVersion,
-                                          configuredCount: configs.count,
-                                       source: source,
-                                       sourceLabel: sourceText,
-                                       dataState: dataState,
-                                       dataStateLabel: dataStateLabel,
-                                       updatedAt: snapshot?.fetchedAt ?? Date(),
-                                       generatedAt: snapshot?.generatedAt,
-                                       services: services,
-                                       quota: quota,
-                                       backend: backend,
-                                       message: snapshot?.lastError ?? (configs.isEmpty ? "请打开 App 设置模型" : nil))
-        WidgetDataStore.save(snapshot)
+        let widgetSnapshot = WidgetDataSnapshot(version: WidgetDataSnapshot.currentVersion,
+                                                 configuredCount: configs.count,
+                                                 source: source,
+                                                 sourceLabel: sourceText,
+                                                 dataState: dataState,
+                                                 dataStateLabel: dataStateLabel,
+                                                 updatedAt: self.snapshot?.fetchedAt ?? Date(),
+                                                 generatedAt: self.snapshot?.generatedAt,
+                                                 services: services,
+                                                 quota: quota,
+                                                 backend: backend,
+                                                 message: self.snapshot?.lastError ?? (configs.isEmpty ? "请打开 App 设置模型" : nil))
+        WidgetDataStore.save(widgetSnapshot)
         WidgetCenter.shared.reloadAllTimelines()
     }
 
