@@ -43,7 +43,8 @@ static NSString *ResolvedPath(NSString *path) {
 static PollState *LoadState(void) {
     PollState *s = [PollState new];
     s.version = 3;
-    s.logs = [NSMutableArray array]; = [NSData dataWithContentsOfFile:ResolvedPath(kStatePath)];
+    s.logs = [NSMutableArray array];
+    NSData *data = [NSData dataWithContentsOfFile:ResolvedPath(kStatePath)];
     if (!data) data = [NSData dataWithContentsOfFile:ResolvedPath(kLegacyStatePath)];
     if (!data) return s;
     NSError *jsonError = nil;
@@ -111,14 +112,13 @@ static void ResetCounters(PollState *s) {
     AppendLog(s, @"info", @"reset-counters", @"后台累计请求、成功、失败计数已清零");
     SaveState(s);
 }
-
-
+static BOOL RequestOnce(NSData **bodyOut, NSInteger *codeOut, NSString **errorOut) {
     NSURL *url = [NSURL URLWithString:kEndpoint];
     if (!url) { if (errorOut) *errorOut = @"无效状态服务地址"; return NO; }
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url cachePolicy:NSURLRequestReloadIgnoringLocalCacheData timeoutInterval:kRequestTimeout];
     [request setValue:@"application/json" forHTTPHeaderField:@"Accept"];
     [request setValue:@"no-cache" forHTTPHeaderField:@"Cache-Control"];
-    [request setValue:@"AIInputStatusBackground/1.1" forHTTPHeaderField:@"User-Agent"];
+    [request setValue:@"AIInputStatusBackground/1.2" forHTTPHeaderField:@"User-Agent"];
 
     dispatch_semaphore_t sem = dispatch_semaphore_create(0);
     __block NSData *body = nil;
@@ -143,6 +143,7 @@ static void ResetCounters(PollState *s) {
     if (errorOut) *errorOut = error.localizedDescription ?: (code ? [NSString stringWithFormat:@"HTTP %ld", (long)code] : @"未收到 HTTP 响应");
     return body != nil && error == nil && code >= 200 && code < 300;
 }
+
 
 static void Poll(PollState *s) {
     NSDate *started = [NSDate date];

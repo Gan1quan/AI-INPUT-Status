@@ -17,7 +17,7 @@ enum NotificationEngine {
         try? await UNUserNotificationCenter.current().add(request)
     }
 
-
+    static func notifyStatusOpened(_ events: [StatusEvent]) async {
         guard !events.isEmpty else { return }
         let content = UNMutableNotificationContent()
         content.title = "AI INPUT 状态异常"
