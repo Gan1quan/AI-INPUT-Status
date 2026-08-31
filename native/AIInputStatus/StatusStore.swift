@@ -259,10 +259,14 @@ final class StatusStore: ObservableObject {
     func export(format: ExportFormat) {
         let ext = format == .json ? "json" : "csv"
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("ai-input-status-\(Int(Date().timeIntervalSince1970)).\(ext)")
-            try diagnosticReport(format: format).data(using: .utf8)?.write(to: url, options: .atomic)
+        do {
+            guard let data = diagnosticReport(format: format).data(using: .utf8) else { throw CocoaError(.fileWriteUnknown) }
+            try data.write(to: url, options: .atomic)
             sharePayload = SharePayload(url: url)
             lastActionMessage = "已生成 \(ext.uppercased()) 报告"
-        } catch { lastError = "导出失败：\(error.localizedDescription)" }
+        } catch {
+            lastError = "导出失败：\(error.localizedDescription)"
+        }
     }
 
     private func csv(_ value: String) -> String { "\"\(value.replacingOccurrences(of: "\"", with: "\"\""))\"" }

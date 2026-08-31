@@ -6,12 +6,12 @@ final class AIInputStatusAppDelegate: NSObject, UIApplicationDelegate {
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         registerBackgroundRefresh()
-        scheduleBackgroundRefresh()
+        Self.scheduleBackgroundRefresh()
         return true
     }
 
     func applicationDidEnterBackground(_ application: UIApplication) {
-        scheduleBackgroundRefresh()
+        Self.scheduleBackgroundRefresh()
     }
 
     private func registerBackgroundRefresh() {
