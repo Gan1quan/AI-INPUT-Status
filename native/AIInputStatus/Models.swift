@@ -208,13 +208,27 @@ struct ModelMonitor: Codable, Hashable, Identifiable {
     var mutedUntil: Date?
     var maintenanceUntil: Date?
 
+    init(id: String, model: String, provider: String = "", account: String = "", enabled: Bool = true, mutedUntil: Date? = nil, maintenanceUntil: Date? = nil) {
+        self.id = id; self.model = model; self.provider = provider; self.account = account; self.enabled = enabled; self.mutedUntil = mutedUntil; self.maintenanceUntil = maintenanceUntil
+    }
+
+    enum CodingKeys: String, CodingKey { case id, model, provider, account, enabled, mutedUntil, maintenanceUntil }
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        model = try values.decodeIfPresent(String.self, forKey: .model) ?? ""
+        id = try values.decodeIfPresent(String.self, forKey: .id) ?? model
+        provider = try values.decodeIfPresent(String.self, forKey: .provider) ?? ""
+        account = try values.decodeIfPresent(String.self, forKey: .account) ?? ""
+        enabled = try values.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        mutedUntil = try values.decodeIfPresent(Date.self, forKey: .mutedUntil)
+        maintenanceUntil = try values.decodeIfPresent(Date.self, forKey: .maintenanceUntil)
+    }
+
     var isMuted: Bool { (mutedUntil ?? .distantPast) > Date() }
     var isInMaintenance: Bool { (maintenanceUntil ?? .distantPast) > Date() }
 
     static func defaults() -> [ModelMonitor] {
-        defaultTargetModels.map {
-            ModelMonitor(id: $0, model: $0, provider: "Input", account: "默认账号", enabled: true, mutedUntil: nil, maintenanceUntil: nil)
-        }
+        defaultTargetModels.map { ModelMonitor(id: $0, model: $0, provider: "Input", account: "默认账号") }
     }
 }
 
@@ -327,6 +341,20 @@ struct NotificationSettings: Codable, Hashable {
     var failureMinutes = 2
     var gatewayThresholdMS = 1500
     var subscriptionQuotaThreshold = 85
+
+    enum CodingKeys: String, CodingKey { case enabled, recoveryEnabled, gatewayEnabled, subscriptionQuotaEnabled, subscriptionExpiryEnabled, failureMinutes, gatewayThresholdMS, subscriptionQuotaThreshold }
+    init() {}
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        recoveryEnabled = try c.decodeIfPresent(Bool.self, forKey: .recoveryEnabled) ?? true
+        gatewayEnabled = try c.decodeIfPresent(Bool.self, forKey: .gatewayEnabled) ?? false
+        subscriptionQuotaEnabled = try c.decodeIfPresent(Bool.self, forKey: .subscriptionQuotaEnabled) ?? true
+        subscriptionExpiryEnabled = try c.decodeIfPresent(Bool.self, forKey: .subscriptionExpiryEnabled) ?? true
+        failureMinutes = max(1, try c.decodeIfPresent(Int.self, forKey: .failureMinutes) ?? 2)
+        gatewayThresholdMS = max(100, try c.decodeIfPresent(Int.self, forKey: .gatewayThresholdMS) ?? 1500)
+        subscriptionQuotaThreshold = min(100, max(1, try c.decodeIfPresent(Int.self, forKey: .subscriptionQuotaThreshold) ?? 85))
+    }
 }
 
 struct CachedEnvelope: Codable { let version: Int; let snapshot: StatusSnapshot }

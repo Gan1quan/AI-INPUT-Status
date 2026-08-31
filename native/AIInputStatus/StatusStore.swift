@@ -140,7 +140,9 @@ final class StatusStore: ObservableObject {
     func requestNotificationPermission() async { _ = await NotificationEngine.requestAuthorization() }
     func updateNotificationSettings(_ value: NotificationSettings) { notificationSettings = value; StatusEngine.saveNotificationSettings(value) }
     func updateMonitors(_ value: [CustomMonitor]) { monitors = Array(value.prefix(20)); StatusEngine.saveMonitors(monitors) }
-    func updateModelMonitors(_ value: [ModelMonitor]) { modelMonitors = value; StatusEngine.saveModelMonitors(value) }
+    func updateModelMonitors(_ value: [ModelMonitor]) { modelMonitors = Array(value.prefix(50)); StatusEngine.saveModelMonitors(modelMonitors) }
+    func addModelMonitor() { guard modelMonitors.count < 50 else { return }; let id = UUID().uuidString; modelMonitors.append(ModelMonitor(id: id, model: "新模型", provider: "Input", account: "默认账号")); StatusEngine.saveModelMonitors(modelMonitors) }
+    func deleteModelMonitors(at offsets: IndexSet) { modelMonitors.remove(atOffsets: offsets); StatusEngine.saveModelMonitors(modelMonitors) }
 
     func muteModel(_ model: ModelMonitor, hours: Int = 8) {
         guard let index = modelMonitors.firstIndex(where: { $0.id == model.id }) else { return }
@@ -151,6 +153,12 @@ final class StatusStore: ObservableObject {
     func maintenanceModel(_ model: ModelMonitor, hours: Int = 2) {
         guard let index = modelMonitors.firstIndex(where: { $0.id == model.id }) else { return }
         modelMonitors[index].maintenanceUntil = Calendar.current.date(byAdding: .hour, value: hours, to: Date())
+        StatusEngine.saveModelMonitors(modelMonitors)
+    }
+
+    func clearMaintenance(_ model: ModelMonitor) {
+        guard let index = modelMonitors.firstIndex(where: { $0.id == model.id }) else { return }
+        modelMonitors[index].maintenanceUntil = nil
         StatusEngine.saveModelMonitors(modelMonitors)
     }
 
