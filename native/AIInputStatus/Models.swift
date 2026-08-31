@@ -334,10 +334,21 @@ struct CachedEnvelope: Codable { let version: Int; let snapshot: StatusSnapshot 
 // MARK: - UI support
 
 enum DiagnosticFilter: String, CaseIterable, Identifiable {
-    case all, healthy, configuration, authentication, network, server
+    case all, healthy, configuration, authentication, quota, rateLimit, timeout, network, server, client
     var id: String { rawValue }
     var label: String {
-        switch self { case .all: return "全部"; case .healthy: return "正常"; case .configuration: return "配置"; case .authentication: return "认证"; case .network: return "网络"; case .server: return "服务端" }
+        switch self {
+        case .all: return "全部"
+        case .healthy: return "正常"
+        case .configuration: return "配置"
+        case .authentication: return "认证"
+        case .quota: return "额度"
+        case .rateLimit: return "限流"
+        case .timeout: return "超时"
+        case .network: return "网络"
+        case .server: return "服务端"
+        case .client: return "请求"
+        }
     }
 }
 

@@ -172,23 +172,45 @@ final class StatusStore: ObservableObject {
 
     var visibleServices: [ServiceStatus] {
         guard let services = snapshot?.services else { return [] }
-        return services.filter {
+        return services.filter { service in
+            let issue = ServiceIssue.from(service.last?.error)
             switch diagnosticFilter {
             case .all: return true
-            case .healthy: return $0.last?.ok == true
-            case .configuration: return ServiceIssue.from($0.last?.error) == .configuration
-            case .authentication: return ServiceIssue.from($0.last?.error) == .authentication
-            case .network: return [.network, .timeout].contains(ServiceIssue.from($0.last?.error))
-            case .server: return ServiceIssue.from($0.last?.error) == .server
+            case .healthy: return service.last?.ok == true
+            case .configuration: return issue == .configuration
+            case .authentication: return issue == .authentication
+            case .quota: return issue == .quota
+            case .rateLimit: return issue == .rateLimit
+            case .timeout: return issue == .timeout
+            case .network: return issue == .network
+            case .server: return issue == .server
+            case .client: return issue == .client
             }
         }
     }
 
     var groupedServices: [(String, [ServiceStatus])] {
-        Dictionary(grouping: visibleServices) { service in
-            guard let config = modelMonitors.first(where: { $0.model == service.model }) else { return service.model }
-            switch serviceGrouping { case .model: return service.model; case .provider: return config.provider; case .account: return config.account }
-        }.map { ($0.key, $0.value.sorted { $0.model < $1.model }) }.sorted { $0.0 < $1.0 }
+        let services = visibleServices
+        let grouping = serviceGrouping
+        let configurations = Dictionary(uniqueKeysWithValues: modelMonitors.map { ($0.model, $0) })
+        var groups: [String: [ServiceStatus]] = [:]
+        for service in services {
+            let key: String
+            if let configuration = configurations[service.model] {
+                switch grouping {
+                case .model: key = service.model
+                case .provider: key = configuration.provider.isEmpty ? "未标注供应商" : configuration.provider
+                case .account: key = configuration.account.isEmpty ? "未标注账号" : configuration.account
+                }
+            } else {
+                key = service.model
+            }
+            groups[key, default: []].append(service)
+        }
+        return groups.keys.sorted().compactMap { key in
+            guard let values = groups[key] else { return nil }
+            return (key, values.sorted { $0.model < $1.model })
+        }
     }
 
     func backup(for service: ServiceStatus) -> ServiceStatus? { snapshot?.services.first { $0.id != service.id && StatusEngine.serviceState($0) == .online } }
@@ -225,8 +247,4 @@ final class StatusStore: ObservableObject {
     private func dayKey(_ date: Date) -> String { let formatter = DateFormatter(); formatter.calendar = Calendar(identifier: .gregorian); formatter.locale = Locale(identifier: "en_US_POSIX"); formatter.timeZone = TimeZone(identifier: "Asia/Shanghai"); formatter.dateFormat = "yyyy-MM-dd"; return formatter.string(from: date) }
 }
 
-enum DiagnosticFilter: String, CaseIterable, Identifiable { case all, healthy, configuration, authentication, network, server; var id: String { rawValue }; var label: String { switch self { case .all: return "全部"; case .healthy: return "正常"; case .configuration: return "配置"; case .authentication: return "认证"; case .network: return "网络"; case .server: return "服务端" } } }
-enum ServiceGrouping: String, CaseIterable, Identifiable { case model, provider, account; var id: String { rawValue }; var label: String { switch self { case .model: return "按模型"; case .provider: return "按供应商"; case .account: return "按账号" } } }
-enum ExportFormat { case csv, json }
-struct SharePayload: Identifiable { let id = UUID(); let url: URL }
 enum PluginHealth { case healthy, stale, failed, starting, unavailable }
