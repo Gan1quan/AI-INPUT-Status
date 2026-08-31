@@ -9,7 +9,7 @@ enum RustCore {
 
     static func p95(_ values: [Int]) -> Int? {
         guard !values.isEmpty else { return nil }
-        let ints = values.map(Int32.init)
+        let ints: [Int32] = values.map { Int32(clamping: $0) }
         let result = ints.withUnsafeBufferPointer { buffer in
             ai_input_p95(buffer.baseAddress, buffer.count)
         }
@@ -34,7 +34,9 @@ enum RustCore {
             guard let value else { return -1 }
             return value ? 1 : 0
         }
-        let latencyValues = latencies.map { max(0, $0 ?? Int.max / 2) }
+        let latencyValues: [Int32] = latencies.map { value in
+            Int32(clamping: value ?? Int.max / 2)
+        }
         let result = stateValues.withUnsafeBufferPointer { stateBuffer in
             latencyValues.withUnsafeBufferPointer { latencyBuffer in
                 ai_input_choose_backup(stateBuffer.baseAddress, latencyBuffer.baseAddress, stateBuffer.count)
